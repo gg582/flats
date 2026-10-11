@@ -57,9 +57,7 @@ func TestMermaidAssetEncoding(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableCompression = true
 	defer transport.CloseIdleConnections()
-	// Leave the client 20s beyond the worker timeout so a slow worker reports
-	// its own 504 instead of a client timeout.
-	client := &http.Client{Transport: transport, Timeout: workerTimeout(t) + 20*time.Second}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	for _, tc := range []struct {
 		name, accept, encoding string
 		status                 int

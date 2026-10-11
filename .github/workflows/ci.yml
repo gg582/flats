@@ -9,50 +9,49 @@ permissions:
   contents: read
 
 jobs:
-  # regression may use the self-hosted ARC runners when they are awake, which
-  # spreads load off slow GitHub-hosted allocation. See pick-runner.yml.
+  # Light, Docker-free Linux checks may run on the self-hosted ARC runners
+  # when they are awake, to take load off GitHub-hosted allocation. See
+  # pick-runner.yml. Tests and race runs stay on GitHub-hosted runners.
   pick-runner:
     uses: ./.github/workflows/pick-runner.yml
 
-  regression:
+  checks:
     needs: pick-runner
     runs-on: ${{ needs.pick-runner.outputs.runner }}
     timeout-minutes: 20
-    env:
-      # The QuickJS worker gzips the Mermaid asset too slowly for the default
-      # 10s request timeout on the self-hosted runners; raise it only there.
-      FLATS_DOCS_TEST_TIMEOUT: ${{ needs.pick-runner.outputs.runner == 'flats-runners' && '60s' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      # The ARC runner image (ghcr.io/actions/actions-runner) ships without a C
-      # toolchain, and the -race steps below need cgo on Linux.
-      - name: Install a C toolchain for -race
-        if: needs.pick-runner.outputs.runner == 'flats-runners'
+      - name: Vet
+        run: go vet ./...
+      - name: CGO-free Linux builds
         run: |
-          command -v gcc >/dev/null && exit 0
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends gcc libc6-dev
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$RUNNER_TEMP/flats-linux-$arch" ./cmd/flats
+          done
+
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Verify module files
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - name: Tests
         run: go test ./...
-      - name: Vet
-        run: go vet ./...
       - name: Selected races
         run: go test -race ./internal/core ./internal/api ./internal/app ./internal/mcpx ./internal/store ./internal/expose/portal
       - name: FILES concurrency races
         run: go test -race ./internal/runtime -run 'TestConcurrentFiles|TestWASIRejectsJSHostABI'
-      - name: CGO-free Linux builds
-        run: |
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$RUNNER_TEMP/flats-linux-$arch" ./cmd/flats
-          done
 
   install-script:
     strategy:
