@@ -41,6 +41,10 @@ jobs:
     needs: pick-runner
     runs-on: ${{ needs.pick-runner.outputs.runner }}
     timeout-minutes: 20
+    env:
+      # The QuickJS worker gzips the Mermaid asset too slowly for the default
+      # 10s request timeout on the self-hosted runners; raise it only there.
+      FLATS_DOCS_TEST_TIMEOUT: ${{ needs.pick-runner.outputs.runner == 'flats-runners' && '60s' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
