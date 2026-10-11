@@ -1,13 +1,13 @@
 import * as Y from "yjs";
-import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex } from "@noble/hashes/utils";
+import { digest as sha256 } from "lib0/hash/sha256";
+import { toHexString } from "lib0/buffer";
 import { encodeUtf8 } from "lib0/string";
 import { base64, unbase64, utf8Bytes, LIMITS } from "./protocol.js";
 import { mergeText, applyText } from "./merge.js";
 export const digest = (s) =>
   globalThis.__flats_docsCodec
     ? globalThis.__flats_docsCodec.digest(s)
-    : bytesToHex(sha256(encodeUtf8(s)));
+    : toHexString(sha256(encodeUtf8(s)));
 export function schema(db) {
   db.exec(
     "CREATE TABLE IF NOT EXISTS flats_docs_conflicts(doc TEXT NOT NULL, generation INTEGER NOT NULL, markdown TEXT NOT NULL, PRIMARY KEY(doc,generation))",

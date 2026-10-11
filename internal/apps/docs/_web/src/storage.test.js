@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as Y from "yjs";
 import {
+  digest,
   validateState,
   validateIncremental,
   validateUpdate,
@@ -65,4 +67,51 @@ test("updates reject truncated or trailing binary data", () => {
   const trailing = new Uint8Array(update.length + 1);
   trailing.set(update);
   assert.throws(() => validateUpdate(trailing), /trailing/);
+});
+
+// Also run with --conditions=browser to exercise lib0's pure-JS SHA-256,
+// the implementation selected by the QuickJS production bundle.
+test("digest preserves SHA-256 values across UTF-8 and block boundaries", () => {
+  const inputs = [
+    "",
+    "abc",
+    "한국어 🙂",
+    "\ud800",
+    "\udc00",
+    "a\ud800z",
+    ...[55, 56, 63, 64, 65, 127, 128, 129, 1024 * 1024].map((n) =>
+      "a".repeat(n),
+    ),
+  ];
+  for (const input of inputs) {
+    assert.equal(
+      digest(input),
+      createHash("sha256").update(input).digest("hex"),
+    );
+  }
+});
+
+test("digest prefers the bounded host codec when available", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "__flats_docsCodec",
+  );
+  const inputs = [];
+  try {
+    Object.defineProperty(globalThis, "__flats_docsCodec", {
+      configurable: true,
+      value: {
+        digest: (input) => {
+          inputs.push(input);
+          return "host-digest";
+        },
+      },
+    });
+    assert.equal(digest("한국어 🙂"), "host-digest");
+    assert.deepEqual(inputs, ["한국어 🙂"]);
+  } finally {
+    if (descriptor)
+      Object.defineProperty(globalThis, "__flats_docsCodec", descriptor);
+    else delete globalThis.__flats_docsCodec;
+  }
 });

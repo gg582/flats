@@ -10,16 +10,20 @@ absent from the build output.
 ```sh
 npm ci --prefix internal/apps/docs/_web
 npm test --prefix internal/apps/docs/_web
+node --conditions=browser --test internal/apps/docs/_web/src/*.test.js
 npm run fixtures --prefix internal/apps/docs/_web
 npm run build --prefix internal/apps/docs/_web
 go test ./internal/apps/docs/... ./internal/runtime/...
 ```
 
-Dependencies are pinned in `_web/package.json` and its lockfile. The build
+Dependencies are pinned in `_web/package.json` and its lockfile. SHA-256 uses
+the bounded host codec in production, with the existing lib0 dependency
+providing the fallback; no separate hashing package is needed. The browser-conditions
+test command also exercises that pure-JavaScript fallback rather than Node crypto. The build
 produces one minified server ESM bundle, embedding the client JavaScript and
 CSS as strings, plus `mermaid-asset.js`, a module exporting the minified
 Mermaid browser bundle as a string. No Node, network, WebAssembly, TextEncoder, or TextDecoder
-is needed at deployment time. Third-party license texts cover the 90 packages
+is needed at deployment time. Third-party license texts cover the 89 packages
 actually bundled, as determined by esbuild's input graph (a package whose
 license is only a README section, such as fastdom, contributes that section).
 
