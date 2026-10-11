@@ -125,6 +125,10 @@ Each document keeps the newest 8 records within 2 MiB; older ones are gone.
   `screenshot` keeps its meaning.
 * Raw HTML in Markdown is not rendered and unsafe links are rejected.
   Relative links and image paths resolve relative to the document's directory.
+* Images can load from the flat's own origin and any HTTPS origin. External
+  images load directly in visitors' browsers; those hosts can observe visits,
+  including private document visits. Upload images in the bundle to keep them
+  same-origin.
 * A fenced code block whose language is exactly `mermaid` is drawn as a
   [Mermaid](https://mermaid.js.org/) diagram (strict security level: no
   click handlers or HTML labels) in the light or dark theme of the reader.

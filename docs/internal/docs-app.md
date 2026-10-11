@@ -109,10 +109,12 @@ when plain HTTP is used. Origin must still match the admitted request origin.
 
 HTML escapes interpolated titles and paths, sets `nosniff`, `Referrer-Policy:
 same-origin`, and a CSP allowing same-origin scripts, same-host HTTP/WebSocket
-connections, same-origin/data images, and the inline styles CodeMirror needs.
+connections, same-origin/data/HTTPS images, and the inline styles CodeMirror needs.
 Raw HTML is disabled in Markdown; unsafe links are rejected. Relative links
 and image paths resolve relative to the document's directory. Preview is
 rendered in the client; assets in `content.assets` are still the host's responsibility.
+External HTTPS images load directly in the browser; remote image hosts can
+observe visits, including visits to private documents.
 
 ### Collaboration model
 
