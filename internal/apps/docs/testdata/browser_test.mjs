@@ -390,6 +390,56 @@ try {
     path: path.join(screenshots, "readonly.png"),
     fullPage: true,
   });
+  const imageURL = "https://images.flats.test/fixture.svg";
+  const images = await open("Images");
+  const publicImages = await publicContext.newPage();
+  for (const page of [images, publicImages]) {
+    await page.route(imageURL, (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1"/></svg>',
+      }),
+    );
+  }
+  await images.goto(url + "/nested/other");
+  await images.locator(".cm-content").waitFor();
+  await wait(
+    async () => (await images.locator("#status").innerText()) === "Saved",
+    "image document not synchronized",
+  );
+  await images.locator(".cm-content").click();
+  await images.keyboard.press("ControlOrMeta+End");
+  await images.keyboard.insertText("\n\n![External image](" + imageURL + ")\n");
+  await images.locator(".cm-content").blur();
+  const editImage = images.locator('.cm-image[alt="External image"]');
+  await editImage.scrollIntoViewIfNeeded();
+  await wait(
+    async () => editImage.evaluate((img) => img.naturalWidth === 2 && img.naturalHeight === 1),
+    "HTTPS image blocked in Edit",
+  );
+  await images.locator('#modes [data-mode="view"]').click();
+  const viewImage = images.locator('#content img[alt="External image"]');
+  await viewImage.scrollIntoViewIfNeeded();
+  await wait(
+    async () => viewImage.evaluate((img) => img.naturalWidth === 2 && img.naturalHeight === 1),
+    "HTTPS image blocked in View",
+  );
+  await images.route("https://images.flats.test/fixture.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: "globalThis.externalScriptExecuted = true;",
+    }),
+  );
+  await assert.rejects(
+    images.addScriptTag({ url: "https://images.flats.test/fixture.js" }),
+  );
+  await publicImages.goto(url + "/nested/other");
+  const publicImage = publicImages.locator('#content img[alt="External image"]');
+  await publicImage.scrollIntoViewIfNeeded();
+  await wait(
+    async () => publicImage.evaluate((img) => img.naturalWidth === 2 && img.naturalHeight === 1),
+    "HTTPS image blocked in public read-only view",
+  );
   const beforeConflict = await editorText(a);
   assert.equal(await a.evaluate(async () => (await fetch("/test-activate")).status), 204);
   await a.locator("#conflict-notice").waitFor({state: "visible", timeout: 30000});
@@ -403,7 +453,7 @@ try {
   await a.screenshot({path: path.join(screenshots, "conflict-notice.png"),fullPage: true});
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: independent contexts, concurrent convergence, remote cursors, Korean composition/emoji, local undo, persistence, offline reconnect, live-preview Edit and View toggle, mobile, public read-only.",
+    "PASS: independent contexts, concurrent convergence, remote cursors, Korean composition/emoji, local undo, persistence, offline reconnect, live-preview Edit and View toggle, mobile, public read-only, HTTPS images with external scripts blocked.",
   );
 } catch (error) {
   for (const [label, page] of [
