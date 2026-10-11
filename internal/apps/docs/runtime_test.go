@@ -46,26 +46,10 @@ func manager(t *testing.T) *flatsruntime.Manager {
 		t.Fatal(err)
 	}
 	managerOnce.Do(func() {
-		sharedManager = &flatsruntime.Manager{DataDir: cacheRoot, Exe: exe, Env: []string{"FLATS_DOCS_TEST_WORKER=1"}, Timeout: workerTimeout(t), Logf: func(string, ...any) {}}
+		sharedManager = &flatsruntime.Manager{DataDir: cacheRoot, Exe: exe, Env: []string{"FLATS_DOCS_TEST_WORKER=1"}, Logf: func(string, ...any) {}}
 	})
 	return sharedManager
 }
-
-// workerTimeout is the per-request worker timeout for these tests. It stays
-// at the runtime default unless FLATS_DOCS_TEST_TIMEOUT (a Go duration such
-// as "60s") raises it for slow CI runners.
-func workerTimeout(t *testing.T) time.Duration {
-	raw := os.Getenv("FLATS_DOCS_TEST_TIMEOUT")
-	if raw == "" {
-		return flatsruntime.DefaultTimeout
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		t.Fatalf("FLATS_DOCS_TEST_TIMEOUT=%q is not a positive duration", raw)
-	}
-	return d
-}
-
 func TestYjsQuickJSFeasibility(t *testing.T) {
 	start := time.Now()
 	srv := startYjsTestModule(t, "spike.js")

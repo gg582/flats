@@ -1,0 +1,43 @@
+name: Pick runner
+
+# Reusable: chooses where a short Linux job runs. The self-hosted ARC scale
+# set flats-runners is used while its host is awake, GitHub-hosted
+# ubuntu-latest otherwise. A heartbeat CronJob in the ARC cluster writes the
+# current unix time to the repository variable ARC_LAST_SEEN every minute; a
+# heartbeat younger than 3 minutes means the runners can pick up jobs.
+#
+# Only use this for quick jobs that need neither Docker, systemd nor macOS.
+# Long-running jobs stay on GitHub-hosted runners.
+
+on:
+  workflow_call:
+    outputs:
+      runner:
+        description: flats-runners or ubuntu-latest
+        value: ${{ jobs.pick.outputs.runner }}
+
+permissions: {}
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - id: pick
+        env:
+          LAST_SEEN: ${{ vars.ARC_LAST_SEEN }}
+        run: |
+          now=$(date +%s)
+          case "$LAST_SEEN" in
+          ''|*[!0-9]*) age= ;;
+          *) age=$((now - LAST_SEEN)) ;;
+          esac
+          if [ -n "$age" ] && [ "$age" -lt 180 ]; then
+            echo "runner=flats-runners" >>"$GITHUB_OUTPUT"
+            echo "ARC heartbeat ${age}s ago -> flats-runners"
+          else
+            echo "runner=ubuntu-latest" >>"$GITHUB_OUTPUT"
+            echo "ARC heartbeat missing or stale (${age:-unset}) -> ubuntu-latest"
+          fi

@@ -16,9 +16,16 @@ permissions:
 # No path filter or cancelling concurrency group: every introduced commit is
 # retained, including the intermediate main commits in a multi-commit push.
 jobs:
-  select:
+  # select only runs git and python3, so it may use the self-hosted ARC
+  # runners when they are awake. See pick-runner.yml.
+  pick-runner:
     if: github.event_name == 'workflow_dispatch' || !github.event.deleted
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/pick-runner.yml
+
+  select:
+    needs: pick-runner
+    if: github.event_name == 'workflow_dispatch' || !github.event.deleted
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.commits.outputs.matrix }}
