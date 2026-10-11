@@ -45,6 +45,21 @@ when the build recorded one, whether the source was modified, and the Go
 version and platform. The console links a release to its release page and a
 clean development build to its commit.
 
+## Build flags
+
+`scripts/build-release.sh` builds every archive, and so every release image,
+with `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w …"`:
+
+- `-s` drops the symbol table and `-w` drops DWARF debug information. Together
+  they make the binary about 30% smaller. Panic stack traces and pprof still
+  show function names and lines, because the Go runtime keeps its own tables.
+- `-trimpath` replaces the build machine's absolute paths with module paths, so
+  the binary does not carry the builder's home directory and the same source
+  builds to the same bytes on any machine.
+
+`go install …@version` cannot pass flags and builds a larger binary with the
+same behavior. A debugger needs a build without `-s -w`.
+
 ## Cutting a release
 
 1. Land every change through a reviewed PR. Wait until CI on `main` passes,

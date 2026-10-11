@@ -92,8 +92,13 @@ upgrades and backups.
 
   ```sh
   go install github.com/gosuda/flats/cmd/flats@latest   # highest stable release; @main for unreleased changes
-  CGO_ENABLED=0 go build -o flats ./cmd/flats           # from a checkout
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o flats ./cmd/flats   # from a checkout
   ```
+
+  The `-s -w` and `-trimpath` flags are what release archives use. They drop
+  the symbol table, debug information and the build machine's file paths, which
+  makes the binary about 30% smaller. They do not change behavior or the
+  reported version; leave them out to debug the binary with `dlv` or `gdb`.
 
 ## Static and server flats
 
