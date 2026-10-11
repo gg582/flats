@@ -9,15 +9,33 @@ permissions:
   contents: read
 
 jobs:
+  # regression may use the self-hosted ARC runners when they are awake, which
+  # spreads load off slow GitHub-hosted allocation. See pick-runner.yml.
+  pick-runner:
+    uses: ./.github/workflows/pick-runner.yml
+
   regression:
-    runs-on: ubuntu-latest
+    needs: pick-runner
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     timeout-minutes: 20
+    env:
+      # The QuickJS worker gzips the Mermaid asset too slowly for the default
+      # 10s request timeout on the self-hosted runners; raise it only there.
+      FLATS_DOCS_TEST_TIMEOUT: ${{ needs.pick-runner.outputs.runner == 'flats-runners' && '60s' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      # The ARC runner image (ghcr.io/actions/actions-runner) ships without a C
+      # toolchain, and the -race steps below need cgo on Linux.
+      - name: Install a C toolchain for -race
+        if: needs.pick-runner.outputs.runner == 'flats-runners'
+        run: |
+          command -v gcc >/dev/null && exit 0
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gcc libc6-dev
       - name: Verify module files
         run: |
           go mod tidy
