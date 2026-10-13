@@ -17,7 +17,9 @@ func TestCheckEvidence(t *testing.T) {
 	}{
 		{name: "unknown", cli: "unknown", guide: "unknown", bootstrap: "unknown"},
 		{name: "direct HTTP", in: CheckInput{CLIPresent: &no, BootstrapPresent: &no}, cli: "not_applicable", guide: "unknown", bootstrap: "not_applicable"},
-		{name: "compatible different release", in: CheckInput{CLIPresent: &yes, CLIVersion: "v0.9.0", ClientContract: ContractRevision, GuideRevision: m.GuideRevision, BootstrapRevision: BootstrapRevision}, cli: "compatible", guide: "current", bootstrap: "current"},
+		{name: "compatible different release", in: CheckInput{CLIPresent: &yes, CLIVersion: "v0.9.0", ClientContract: ContractRevision, GuideRevision: m.GuideRevision, BootstrapRevision: BootstrapRevision, BootstrapSHA256: m.BootstrapSHA256}, cli: "compatible", guide: "current", bootstrap: "current"},
+		{name: "revision alone is unknown", in: CheckInput{BootstrapRevision: BootstrapRevision}, cli: "unknown", guide: "unknown", bootstrap: "unknown"},
+		{name: "different bytes same revision", in: CheckInput{BootstrapRevision: BootstrapRevision, BootstrapSHA256: Digest("modified")}, cli: "unknown", guide: "unknown", bootstrap: "refresh_required"},
 		{name: "stale", in: CheckInput{ClientContract: 99, GuideRevision: "old", BootstrapRevision: 99}, cli: "update_required", guide: "refresh_required", bootstrap: "refresh_required"},
 	}
 	for _, tt := range tests {
@@ -36,7 +38,8 @@ func TestCheckEvidence(t *testing.T) {
 	}
 	for _, in := range []CheckInput{
 		{CLIPresent: &no, CLIVersion: "v1.0.0"}, {CLIPresent: &no, ClientContract: 1},
-		{BootstrapPresent: &no, BootstrapRevision: 1}, {ClientContract: -1}, {BootstrapRevision: -1},
+		{BootstrapPresent: &no, BootstrapRevision: 1}, {BootstrapPresent: &no, BootstrapSHA256: m.BootstrapSHA256},
+		{BootstrapRevision: 1, BootstrapSHA256: "bad"}, {ClientContract: -1}, {BootstrapRevision: -1},
 	} {
 		if _, err := Check(m, in); err == nil {
 			t.Errorf("accepted conflicting input %+v", in)
@@ -84,6 +87,25 @@ func TestManifestValidation(t *testing.T) {
 		if err := ValidateManifest(dev); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestPublisherBootstrapRejectsSelfConsistentHostContent(t *testing.T) {
+	m := NewManifest(buildinfo.Info{Version: "dev"}, 1024)
+	m.Skill += "\nHost-controlled instruction\n"
+	m.BootstrapSHA256 = Digest(m.Skill)
+	if err := ValidateManifest(m); err != nil {
+		t.Fatalf("modified skill should pass consistency checks: %v", err)
+	}
+	if err := ValidatePublisherBootstrap(m); err == nil {
+		t.Fatal("host-controlled skill was accepted as publisher content")
+	}
+	out, err := Check(m, CheckInput{
+		BootstrapRevision: m.BootstrapRevision,
+		BootstrapSHA256: m.BootstrapSHA256,
+	})
+	if err != nil || out.BootstrapStatus != "refresh_required" {
+		t.Fatalf("host-controlled bytes reported current: %+v, %v", out, err)
 	}
 }
 

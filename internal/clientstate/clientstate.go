@@ -36,6 +36,7 @@ type CheckInput struct {
 	GuideRevision     string `json:"guide_revision,omitempty"`
 	BootstrapPresent  *bool  `json:"bootstrap_present,omitempty"`
 	BootstrapRevision int    `json:"bootstrap_revision,omitempty"`
+	BootstrapSHA256   string `json:"bootstrap_sha256,omitempty"`
 }
 
 type CheckResult struct {
@@ -152,6 +153,19 @@ func ValidateManifest(m Manifest) error {
 	return nil
 }
 
+// ValidatePublisherBootstrap ensures that a remote host cannot choose the bytes
+// installed as a persistent skill. The running CLI's embedded skill is the
+// trusted release artifact; a remote digest only proves internal consistency.
+func ValidatePublisherBootstrap(m Manifest) error {
+	if err := ValidateManifest(m); err != nil {
+		return err
+	}
+	if m.Skill != plugins.Skill {
+		return fmt.Errorf("server bootstrap differs from the skill embedded in this CLI; update the CLI from a trusted release before syncing")
+	}
+	return nil
+}
+
 // Check compares only evidence provided by the caller; absent data stays unknown.
 func Check(m Manifest, in CheckInput) (CheckResult, error) {
 	if err := ValidateManifest(m); err != nil {
@@ -165,9 +179,13 @@ func Check(m Manifest, in CheckInput) (CheckResult, error) {
 	if noCLI && (in.CLIVersion != "" || in.ClientContract != 0) {
 		return CheckResult{}, fmt.Errorf("cli_present false conflicts with CLI identity")
 	}
-	if noBootstrap && in.BootstrapRevision != 0 {
-		return CheckResult{}, fmt.Errorf("bootstrap_present false conflicts with bootstrap revision")
+	if noBootstrap && (in.BootstrapRevision != 0 || in.BootstrapSHA256 != "") {
+		return CheckResult{}, fmt.Errorf("bootstrap_present false conflicts with bootstrap identity")
 	}
+	if in.BootstrapSHA256 != "" && !validDigest(in.BootstrapSHA256) {
+		return CheckResult{}, fmt.Errorf("bootstrap SHA-256 must be 64 lowercase hexadecimal characters")
+	}
+	publisherSkill := m.Skill == plugins.Skill
 	m.Skill = ""
 	out := CheckResult{Manifest: m, CLIStatus: "unknown", GuideStatus: "unknown", BootstrapStatus: "unknown"}
 	switch {
@@ -187,9 +205,15 @@ func Check(m Manifest, in CheckInput) (CheckResult, error) {
 	switch {
 	case noBootstrap:
 		out.BootstrapStatus = "not_applicable"
-	case in.BootstrapRevision == m.BootstrapRevision:
+	case in.BootstrapRevision == 0:
+		// No visible revision means the installed skill cannot be identified.
+	case in.BootstrapRevision != m.BootstrapRevision:
+		out.BootstrapStatus = "refresh_required"
+	case in.BootstrapSHA256 == "":
+		// A matching revision does not establish which bytes are installed.
+	case in.BootstrapSHA256 == m.BootstrapSHA256 && publisherSkill:
 		out.BootstrapStatus = "current"
-	case in.BootstrapRevision > 0:
+	default:
 		out.BootstrapStatus = "refresh_required"
 	}
 	return out, nil
