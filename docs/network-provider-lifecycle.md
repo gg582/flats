@@ -466,11 +466,11 @@ An operator-validated revocation confirms Manager teardown of that flat’s Tail
 reports `ErrNetbirdNotBuilt`) owns the host's one embedded NetBird
 peer and serves two providers from it. `netbird` (Private, a mesh provider
 like `tailscale`) listens on the peer's overlay address with `ListenTCP`, one
-port per host from a persisted pool (21000–21999, `<data>/netbird/ports.json`),
-and reports `http://<peer FQDN>:<port>`. All flats share that one host name, so
+port per host from its persisted private pool (22000–22999,
+`<data>/netbird/ports.json`), and reports `http://<peer FQDN>:<port>`. All flats share that one host name, so
 their browser cookies are shared (cookies are not scoped by port); this is a
 known limit, not isolated by Flats. `netbird-expose` (Public) listens the
-same way on a separate port, asks NetBird to expose it (`Expose` with the slug as
+same way on a separate public port (23000–23999), asks NetBird to expose it (`Expose` with the slug as
 name prefix, HTTP, no PIN or password) and keeps the session alive; a keep-alive
 error or lost listener exposes again with backoff, so the URL can change and
 `PublicURL` reports the current one. `ServePublic` returns once the first expose
@@ -487,9 +487,13 @@ cannot deregister a peer, so the peer remains in the NetBird account.
 
 `StopPublicRoutes` calls `StopPublic` (session ended, port kept) even without a
 registered route. `StopProviderRoutes(…, netbird)` and `StopExposure` call
-`StopPrivate`. `StopSlug` calls `RetirePublic` then `RetirePrivate`, which free
-the ports (a public port is quarantined for 24 hours first, because NetBird only
-logs a failed `StopExpose` and the proxy mapping may outlive the session); a failed retirement keeps the routes registered for retry. The
+`StopPrivate`. `StopSlug` calls `RetirePublic` then `RetirePrivate`. Private ports are
+freed; public ports are permanently reserved because a failed `StopExpose`
+may leave a remote proxy forwarding. Existing reservations from the old shared
+21000–21999 pool are moved to the new role-specific ranges on first use, and
+the old ports are permanently quarantined. This can change existing URLs
+once on upgrade. Exhaustion fails closed; remote teardown cannot be verified
+by the embedded client. A failed retirement keeps the routes registered for retry. The
 approval policy token includes the management URL and peer fingerprint while a
 NetBird provider is granted, so an approval does not carry over to another
 peer. Public routes strip `Tailscale-User-*` identity headers like zrok;
