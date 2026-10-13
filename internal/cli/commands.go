@@ -72,36 +72,42 @@ func (a *app) upload(src, slug, message string, deploy bool, expected int, draft
 		return err
 	}
 
-	path, err := filepath.EvalSymlinks(src)
+
+	source, err := openUploadSource(src)
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
+	defer source.close()
+
+	info := source.info
 	var body []byte
 	var ps packStats
-	gitDir, ctype := path, "application/gzip"
+	gitDir, ctype := filepath.Clean(src), "application/gzip"
 	if info.IsDir() {
-		body, ps, err = packDir(path, st.UploadMaxBytes)
+		body, ps, err = packOpenedDir(source.dir, src, st.UploadMaxBytes)
 		if err != nil {
 			return err
 		}
 	} else {
-		// An archive (tar, tar.gz or zip) is sent as is; the server sniffs
-		// its format. Refuse files the server would reject anyway (it reads
-		// at most the limit plus a quarter plus 1 MiB) before loading them.
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is neither a directory nor an archive file", src)
-		}
-		if lim := st.UploadMaxBytes; lim > 0 && info.Size() > lim+lim/4+1<<20 {
+		// The server sniffs tar, tar.gz, and zip archives. Pin the original
+		// file before reading, so changing its path cannot redirect upload.
+		// It reads at most the limit plus a quarter plus 1 MiB.
+		lim := st.UploadMaxBytes
+		max := lim + lim/4 + (1 << 20)
+		if lim > 0 && info.Size() > max {
 			return fmt.Errorf("%s is %s, larger than the server's %s upload limit", src, humanBytes(info.Size()), humanBytes(lim))
 		}
-		gitDir, ctype = filepath.Dir(path), "application/octet-stream"
-		body, err = os.ReadFile(path)
+		gitDir, ctype = filepath.Dir(gitDir), "application/octet-stream"
+		reader := io.Reader(source.file)
+		if lim > 0 {
+			reader = io.LimitReader(reader, max+1)
+		}
+		body, err = io.ReadAll(reader)
 		if err != nil {
 			return err
+		}
+		if lim > 0 && int64(len(body)) > max {
+			return fmt.Errorf("%s grew beyond the server's %s upload limit while reading", src, humanBytes(lim))
 		}
 	}
 	packed := time.Since(start)

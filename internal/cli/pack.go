@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 )
@@ -42,77 +42,122 @@ func skipEntry(name string, dir bool) bool {
 // outside the build into a public site. limit > 0 bounds the uncompressed
 // size.
 func packDir(root string, limit int64) ([]byte, packStats, error) {
+	source, err := openUploadSource(root)
+	if err != nil {
+		return nil, packStats{}, err
+	}
+	defer source.close()
+	if source.dir == nil {
+		return nil, packStats{}, fmt.Errorf("%s is not a directory", root)
+	}
+	return packOpenedDir(source.dir, root, limit)
+}
+
+// packOpenedDir walks pinned directory handles. Every opened child must match
+// the entry observed during enumeration, even if another process replaces
+// files or directories with symlinks while the build is being packed.
+func packOpenedDir(root *os.Root, name string, limit int64) ([]byte, packStats, error) {
 	var st packStats
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+
+	var walk func(*os.Root, string) error
+	walk = func(dir *os.Root, prefix string) error {
+		entries, err := fs.ReadDir(dir.FS(), ".")
 		if err != nil {
 			return err
 		}
-		if p == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if skipEntry(d.Name(), d.IsDir()) {
-			st.Skipped++
-			if d.IsDir() {
-				return filepath.SkipDir
+		for _, entry := range entries {
+			rel := path.Join(prefix, entry.Name())
+			if skipEntry(entry.Name(), entry.IsDir()) {
+				st.Skipped++
+				continue
 			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symbolic link; uploads cannot contain links (copy the target into the build output instead)", rel)
-		}
-		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is not a regular file; remove it from the build output", rel)
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		st.Files++
-		st.Bytes += info.Size()
-		if limit > 0 && st.Bytes > limit {
-			return fmt.Errorf("build is larger than the server's %d-byte upload limit (remove source maps, large media or dependencies from the build output)", limit)
-		}
-		hdr := &tar.Header{
-			Name:     rel,
-			Mode:     int64(info.Mode().Perm()),
-			Size:     info.Size(),
-			ModTime:  info.ModTime().Truncate(time.Second),
-			Typeflag: tar.TypeReg,
-			Format:   tar.FormatPAX,
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		n, err := io.Copy(tw, f)
-		if err != nil {
-			return err
-		}
-		if n != info.Size() {
-			return fmt.Errorf("%s changed while packing", rel)
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symbolic link; uploads cannot contain links (copy the target into the build output instead)", rel)
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if info.Mode()&fs.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symbolic link; uploads cannot contain links (copy the target into the build output instead)", rel)
+			}
+			if entry.IsDir() {
+				child, err := dir.OpenRoot(entry.Name())
+				if err != nil {
+					return err
+				}
+				opened, err := child.Stat(".")
+				if err == nil && !os.SameFile(info, opened) {
+					err = fmt.Errorf("%s changed while packing", rel)
+				}
+				if err == nil {
+					err = walk(child, rel)
+				}
+				closeErr := child.Close()
+				if err != nil {
+					return err
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+				continue
+			}
+			if !entry.Type().IsRegular() || !info.Mode().IsRegular() {
+				return fmt.Errorf("%s is not a regular file; remove it from the build output", rel)
+			}
+
+			f, err := dir.Open(entry.Name())
+			if err != nil {
+				return err
+			}
+			opened, err := f.Stat()
+			if err == nil && (!opened.Mode().IsRegular() || !os.SameFile(info, opened)) {
+				err = fmt.Errorf("%s changed while packing", rel)
+			}
+			if err != nil {
+				_ = f.Close()
+				return err
+			}
+			st.Files++
+			st.Bytes += opened.Size()
+			if limit > 0 && st.Bytes > limit {
+				_ = f.Close()
+				return fmt.Errorf("build is larger than the server's %d-byte upload limit (remove source maps, large media or dependencies from the build output)", limit)
+			}
+			hdr := &tar.Header{
+				Name:     rel,
+				Mode:     int64(opened.Mode().Perm()),
+				Size:     opened.Size(),
+				ModTime:  opened.ModTime().Truncate(time.Second),
+				Typeflag: tar.TypeReg,
+				Format:   tar.FormatPAX,
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				_ = f.Close()
+				return err
+			}
+			n, copyErr := io.Copy(tw, f)
+			closeErr := f.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if n != opened.Size() {
+				return fmt.Errorf("%s changed while packing", rel)
+			}
 		}
 		return nil
-	})
-	if err != nil {
+	}
+	if err := walk(root, ""); err != nil {
 		return nil, st, err
 	}
 	if st.Files == 0 {
-		return nil, st, fmt.Errorf("%s has no files to upload", root)
+		return nil, st, fmt.Errorf("%s has no files to upload", name)
 	}
 	if err := tw.Close(); err != nil {
 		return nil, st, err
