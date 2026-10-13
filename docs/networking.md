@@ -172,7 +172,7 @@ userspace, so Flats needs no root rights or tunnel interface. **Turn on** NetBir
 and/or NetBird Expose, then allow them on a flat.
 
 - **NetBird (Private)** serves each flat on the peer's overlay address, on its
-  own TCP port (21000–21999, kept across restarts), over plain HTTP. Reach it
+  own TCP port (22000–22999, kept across restarts), over plain HTTP. Reach it
   from another peer that your NetBird access policies allow, at the URL the
   flat's page shows. Previews and drafts do not use NetBird. **Flats on the
   same peer share one browser cookie jar.** The peer has a single host name and
@@ -182,8 +182,9 @@ and/or NetBird Expose, then allow them on a flat.
   a session; static flats are unaffected. Use NetBird for flats you trust
   together, and serve a flat that needs its own cookies through NetBird Expose,
   Tailscale (each flat has its own host name) or another provider.
-- **NetBird Expose (Public)** exposes a public flat through NetBird's reverse
-  proxy, which must be enabled on your NetBird account or server. Flats asks
+- **NetBird Expose (Public)** exposes a public flat from its separate TCP
+  port pool (23000–23999) through NetBird's reverse proxy, which must be
+  enabled on your NetBird account or server. Flats asks
   for an expose named after the slug and keeps the session alive; the URL NetBird
   returns is the flat's public URL. If NetBird ends the session Flats exposes again, and
   the URL changes: NetBird adds a random suffix to each expose, so a flat that
@@ -194,10 +195,14 @@ and/or NetBird Expose, then allow them on a flat.
 **Disconnect peer** deletes the peer identity from this machine; turn both
 providers off first. NetBird's embedded client cannot remove a peer, so remove
 it in the NetBird dashboard (Peers) and revoke a reusable setup key. If the peer
-was removed in the dashboard, connect again with a new key. Deleting a flat
-ends its expose session and releases its port; a public flat's port stays
-out of use for 24 hours, because NetBird only logs a failed attempt to end an
-expose session and its proxy might still forward to that port.
+was removed in the dashboard, connect again with a new key. Deleting a flat ends its expose session, but its public TCP port is
+permanently reserved: the embedded client cannot verify that the remote proxy
+stopped forwarding. Exhausting the public port pool refuses new exposes rather
+than reusing a possibly reachable port. Upgrades from the earlier shared
+21000–21999 pool move both private and public listeners to the new ranges on
+their first start. Existing private URLs can change after this migration;
+always use the current URLs shown by Flats. Do not clear retired port records
+unless you have independently verified that the remote forwarding rules are gone.
 
 ## Visibility
 
