@@ -184,8 +184,7 @@ and/or NetBird Expose, then allow them on a flat.
   Tailscale (each flat has its own host name) or another provider.
 - **NetBird Expose (Public)** exposes a public flat from its separate TCP
   port pool (23000–23999) through NetBird's reverse proxy, which must be
-  enabled on your NetBird account or server. Flats asks
-  for an expose named after the slug and keeps the session alive; the URL NetBird
+  enabled on your NetBird account or server. Flats asks for an expose named after the slug and keeps the session alive; the URL NetBird
   returns is the flat's public URL. If NetBird ends the session Flats exposes again, and
   the URL changes: NetBird adds a random suffix to each expose, so a flat that
   goes Private and Public again, or whose session is exposed again, gets a new
@@ -195,8 +194,8 @@ and/or NetBird Expose, then allow them on a flat.
 **Disconnect peer** deletes the peer identity from this machine; turn both
 providers off first. NetBird's embedded client cannot remove a peer, so remove
 it in the NetBird dashboard (Peers) and revoke a reusable setup key. If the peer
-was removed in the dashboard, connect again with a new key. Deleting a flat ends its expose session, but its public TCP port is
-permanently reserved: the embedded client cannot verify that the remote proxy
+was removed in the dashboard, connect again with a new key. Deleting a
+flat ends its expose session, but its public TCP port is permanently reserved: the embedded client cannot verify that the remote proxy
 stopped forwarding. Exhausting the public port pool refuses new exposes rather
 than reusing a possibly reachable port. Upgrades from the earlier shared
 21000–21999 pool move both private and public listeners to the new ranges on
