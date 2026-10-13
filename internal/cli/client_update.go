@@ -109,6 +109,7 @@ func (a *app) checkClient(args []string) error {
 		}
 		if present {
 			hash = selfupdate.Digest(data)
+			in.BootstrapSHA256 = hash
 			in.BootstrapRevision, _ = clientstate.SkillRevision(string(data))
 		}
 	}
@@ -230,6 +231,9 @@ func (a *app) syncSkill(args []string) error {
 	m, e := a.clientManifest()
 	if e != nil {
 		return e
+	}
+	if e := clientstate.ValidatePublisherBootstrap(m); e != nil {
+		return coded("untrusted_skill", e)
 	}
 	changed, p, e := selfupdate.SyncSkill(a.ctx, *output, []byte(m.Skill), strings.ToLower(*expected), a.env.ConfigDir, func() error {
 		next, e := a.clientManifest()

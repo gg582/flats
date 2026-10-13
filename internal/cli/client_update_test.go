@@ -46,7 +46,7 @@ func TestClientCheckResources(t *testing.T) {
 	api, url, m := clientFixture(t)
 	dir := t.TempDir()
 	env := Env{ConfigDir: filepath.Join(dir, "config"), Executable: func() (string, error) { return "/standalone/flats", nil }}
-	for _, name := range []string{"missing", "current", "unknown"} {
+	for _, name := range []string{"missing", "current", "unknown", "modified"} {
 		t.Run(name, func(t *testing.T) {
 			skill := filepath.Join(t.TempDir(), "SKILL.md")
 			want := "refresh_required"
@@ -57,6 +57,10 @@ func TestClientCheckResources(t *testing.T) {
 			if name == "unknown" {
 				os.WriteFile(skill, []byte("old skill without revision"), 0644)
 				want = "unknown"
+			}
+			if name == "modified" {
+				os.WriteFile(skill, []byte(m.Skill+"\nmodified"), 0644)
+				want = "refresh_required"
 			}
 			r := runEnv(t, env, url, "client", "check", "--skill-file", skill, "--json")
 			var out map[string]any
@@ -114,6 +118,52 @@ func TestSkillCommand(t *testing.T) {
 	b, _ := os.ReadFile(skill)
 	if string(b) != "old" {
 		t.Fatalf("changed: %q", b)
+	}
+}
+
+func TestSkillSyncRejectsHostControlledInstructions(t *testing.T) {
+	api, url, m := clientFixture(t)
+	m.Skill += "\nHost-controlled instruction\n"
+	m.BootstrapSHA256 = clientstate.Digest(m.Skill)
+	if err := clientstate.ValidateManifest(m); err != nil {
+		t.Fatalf("fixture must be internally valid: %v", err)
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.handle("GET /api/client", 200, string(body))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "standalone", "SKILL.md")
+	env := Env{ConfigDir: filepath.Join(dir, "config")}
+	requireResourceCode(t, runEnv(t, env, url, "skill", "sync", "--output", path, "--json"), "untrusted_skill")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("host-controlled skill was installed: %v", err)
+	}
+	if _, err := os.Stat(env.ConfigDir); !os.IsNotExist(err) {
+		t.Fatalf("rejected sync created local config: %v", err)
+	}
+
+	// Even when a matching remote digest accompanies an already altered local
+	// file, neither the check nor a replacement may treat it as trusted.
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(m.Skill), 0644); err != nil {
+		t.Fatal(err)
+	}
+	checked := runEnv(t, env, url, "client", "check", "--skill-file", path, "--json")
+	var result struct {
+		BootstrapStatus string `json:"bootstrap_status"`
+	}
+	if checked.code != 0 || json.Unmarshal([]byte(checked.stdout), &result) != nil || result.BootstrapStatus != "refresh_required" {
+		t.Fatalf("modified installed skill reported current: %+v", checked)
+	}
+	requireResourceCode(t, runEnv(t, env, url, "skill", "sync", "--output", path, "--json"), "untrusted_skill")
+	installed, err := os.ReadFile(path)
+	if err != nil || string(installed) != m.Skill {
+		t.Fatalf("refused sync modified the local file: %q, %v", installed, err)
 	}
 }
 
