@@ -51,8 +51,8 @@ func TestE2E(t *testing.T) {
 	}
 	t.Logf("time to ready: %v, urls %v", time.Since(start), urls)
 	pub := n.URL(slug)
-	if !strings.HasPrefix(pub, "https://"+slug+".") {
-		t.Fatalf("URL = %q", pub)
+	if !strings.HasPrefix(pub, "https://"+slug+"-") {
+		t.Fatalf("URL = %q, want identity-bound canonical hostname", pub)
 	}
 	if hi := n.Status().Hosts[0]; hi.State != "ready" || hi.URL != pub {
 		t.Fatalf("status = %+v", hi)

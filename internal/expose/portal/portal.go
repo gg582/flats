@@ -4,14 +4,12 @@
 // canonical hostname bound to the identity address, which stays stable
 // across restarts: <slug>-<address>.<relay host>, or
 // <name hash>--<address>.<relay host> for slugs longer than 22 characters.
-// Relays also grant the friendly <slug>.<relay host> alias while no other
-// identity holds it; Flats shows that URL when granted, else the canonical
-// one, and warns when an alias it showed is no longer granted (see the
-// alias memory comment above aliasPath).
+// Relays may also grant a friendly <slug>.<relay host> alias, which another
+// identity can acquire later. Flats publishes only the identity-bound
+// canonical URL and warns if a previously granted alias is lost.
 package portal
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,7 +124,7 @@ type entry struct {
 	primary string                     // discovered relay whose URL URL() keeps returning while it is ready
 	sticky  map[string]sdk.RelayStatus // terminal failures, kept after deselection
 	logged  map[string]string          // relayURL -> last logged state
-	aliases map[string]string          // relayURL -> alias URL last shown (see aliasPath)
+	aliases map[string]string          // relayURL -> alias URL last granted (see aliasPath)
 }
 
 type handlerBox struct {
@@ -550,11 +548,14 @@ func (n *Net) readyURLs(e *entry, sts []sdk.RelayStatus) []string {
 	return urls
 }
 
-// displayURL is the URL Flats shows for a relay: the friendly
-// <slug>.<relay host> alias when the relay granted it to this exposure,
-// else the identity-bound canonical URL. A default https port is dropped.
+// displayURL returns the identity-bound canonical URL. Friendly aliases
+// are reassignable and must not be published as primary URLs.
 func displayURL(s sdk.RelayStatus) string {
-	raw := cmp.Or(s.AliasURL, s.PublicURL)
+	return normalizeURL(s.PublicURL)
+}
+
+// normalizeURL drops the default HTTPS port without changing other URLs.
+func normalizeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Port() != "443" {
 		return raw
@@ -669,7 +670,7 @@ func (n *Net) record(e *entry, sts []sdk.RelayStatus) (aliasesChanged bool) {
 			continue
 		}
 		if s.AliasURL != "" && isReady(s) {
-			if u := displayURL(s); e.aliases[s.RelayURL] != u {
+			if u := normalizeURL(s.AliasURL); e.aliases[s.RelayURL] != u {
 				e.aliases[s.RelayURL] = u
 				aliasesChanged = true
 			}
@@ -711,13 +712,12 @@ func (n *Net) record(e *entry, sts []sdk.RelayStatus) (aliasesChanged bool) {
 }
 
 // Alias memory. A relay grants the friendly <slug>.<relay host> alias only
-// while no other Portal identity holds it, and the SDK falls back to the
-// canonical hostname without an error when another identity took it, for
-// example while this flat was offline. A link someone was given then opens
-// that other service. Flats therefore remembers the alias it last showed
-// for each relay in <Dir>/<slug>.alias and reports when a ready relay no
-// longer grants it. The warning stays while that relay lacks the alias;
-// deleting the file clears it.
+// while no other Portal identity holds it. Another identity can claim the
+// alias while a flat is offline, taking over links to the old alias.
+// Earlier Flats versions published these aliases as primary URLs. Keep a
+// record of granted aliases in <Dir>/<slug>.alias to warn when a ready relay
+// no longer grants one, including after a restart. The warning persists
+// until the alias is restored or the file is deleted.
 
 // aliasLostHint explains a lost alias.
 const aliasLostHint = "another Portal identity may hold that name now, so links to it can reach another service; share the current URL instead"
@@ -769,7 +769,7 @@ func (n *Net) saveAliases(slug string, aliases map[string]string) {
 	}
 }
 
-// lostAlias returns the alias Flats last showed for s's relay when s is
+// lostAlias returns the previously granted alias for s's relay when s is
 // ready without it, else "". e.mu is held.
 func lostAlias(e *entry, s sdk.RelayStatus) string {
 	if !isReady(s) || s.AliasURL != "" {

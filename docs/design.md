@@ -40,7 +40,7 @@ flats/<slug>/previews/<host>/   preview copy of data/ (removed with the preview)
 tsnet/<host>/                   tsnet node state (one directory per node)
 runtime/docs/<app>-<content>/  read-only embedded docs modules and generated content.js
 portal/<slug>.json              Portal identity (keeps the canonical public hostname stable)
-portal/<slug>.alias             friendly aliases last shown, per relay (to warn when one is lost)
+portal/<slug>.alias             previously granted friendly aliases, per relay (loss warnings)
 ```
 
 The host acquires `<data>/flats.lock` immediately after creating the directory,
@@ -176,14 +176,15 @@ connections when exposure is withdrawn.
   `<slug>-<address>.<relay>` (a hash replaces slugs over 22 characters) is
   bound to the flat's Portal identity and never changes. The friendly
   `<slug>.<relay>` alias is granted only while no other Portal identity
-  holds that name. Flats shows the alias when the relay granted it and the
-  canonical URL otherwise. It remembers each alias it showed in
-  `portal/<slug>.alias`. When a ready relay no longer grants that alias
-  (another identity took the name, for example while the flat was
-  offline), the status detail and log say that links to the alias can now
-  reach another service. The warning stays while that relay lacks the
-  alias; deleting `portal/<slug>.alias` clears it. A renamed flat starts
-  without alias memory, so links to its old slug's alias are not tracked.
+  holds that name. Flats publishes the canonical URL even if the alias is
+  granted: the friendly alias can later be reassigned to another identity.
+  Earlier versions of Flats showed the alias as the primary URL, so links
+  to it may still exist. Flats remembers granted aliases in
+  `portal/<slug>.alias`. When a ready relay no longer grants an alias,
+  the status detail and log warn that old links can reach another service.
+  The warning remains until the alias is restored or the file is deleted.
+  A renamed flat starts without alias memory, so links to its old slug's
+  alias are not tracked.
   Discovery-only startup can take about
   a minute; the API returns the public URL once a relay is ready. Public is
   never described as access control; every API response that returns a public

@@ -889,7 +889,7 @@ func TestNoPinWithExplicitRelays(t *testing.T) {
 	}
 }
 
-func TestDisplayURLPrefersGrantedAliasURL(t *testing.T) {
+func TestDisplayURLUsesIdentityBoundPublicURL(t *testing.T) {
 	const (
 		canonical = "https://blog-0123456789abcdef0123456789abcdef01234567.relay.example:443"
 		friendly  = "https://blog.relay.example:443"
@@ -899,9 +899,10 @@ func TestDisplayURLPrefersGrantedAliasURL(t *testing.T) {
 		st   sdk.RelayStatus
 		want string
 	}{
-		{"friendly alias granted", sdk.RelayStatus{PublicURL: canonical, AliasURL: friendly}, "https://blog.relay.example"},
-		{"canonical fallback", sdk.RelayStatus{PublicURL: canonical}, "https://blog-0123456789abcdef0123456789abcdef01234567.relay.example"},
-		{"explicit port kept", sdk.RelayStatus{PublicURL: "https://blog-x.relay.example:8443", AliasURL: "https://blog.relay.example:8443"}, "https://blog.relay.example:8443"},
+		{"granted alias ignored", sdk.RelayStatus{PublicURL: canonical, AliasURL: friendly}, "https://blog-0123456789abcdef0123456789abcdef01234567.relay.example"},
+		{"canonical without alias", sdk.RelayStatus{PublicURL: canonical}, "https://blog-0123456789abcdef0123456789abcdef01234567.relay.example"},
+		{"explicit port kept", sdk.RelayStatus{PublicURL: "https://blog-x.relay.example:8443", AliasURL: "https://blog.relay.example:8443"}, "https://blog-x.relay.example:8443"},
+		{"alias alone ignored", sdk.RelayStatus{AliasURL: friendly}, ""},
 		{"no port", sdk.RelayStatus{PublicURL: "https://blog.relay.example"}, "https://blog.relay.example"},
 		{"ipv6 default port", sdk.RelayStatus{PublicURL: "https://[::1]:443"}, "https://[::1]"},
 		{"empty status", sdk.RelayStatus{}, ""},
@@ -928,10 +929,9 @@ func hostDetail(n *Net, slug string) (url, detail string) {
 	return "", ""
 }
 
-// A granted alias is shown; when a ready relay stops granting it (another
-// identity took the name), Flats shows the canonical URL and warns, also
-// after a restart, until the alias is granted again.
-func TestAliasShownAndLossWarned(t *testing.T) {
+// A granted alias never replaces the canonical URL. If the alias is lost,
+// Flats still warns about old links, including after a restart.
+func TestAliasNotPublishedAndLossWarned(t *testing.T) {
 	const (
 		relay     = "https://m-relay.example"
 		canonical = "https://blog-0123456789abcdef0123456789abcdef01234567.m-relay.example:443"
@@ -962,7 +962,7 @@ func TestAliasShownAndLossWarned(t *testing.T) {
 	}
 	f := ff.last(t)
 
-	// While connecting, a held alias is not shown yet.
+	// Neither a pending alias nor a pending canonical URL is shown.
 	connecting := aliased(relay, canonical, alias)
 	connecting.State = sdk.RelayConnecting
 	f.set(connecting)
@@ -972,9 +972,18 @@ func TestAliasShownAndLossWarned(t *testing.T) {
 	}
 
 	f.set(aliased(relay, canonical, alias))
-	waitFor(t, func() bool { return n.URL("blog") == "https://blog.m-relay.example" })
-	if u, d := hostDetail(n, "blog"); u != "https://blog.m-relay.example" || strings.Contains(d, "no longer granted") {
+	waitFor(t, func() bool {
+		return n.URL("blog") == "https://blog-0123456789abcdef0123456789abcdef01234567.m-relay.example"
+	})
+	if u, d := hostDetail(n, "blog"); u != n.URL("blog") || strings.Contains(d, "no longer granted") {
 		t.Fatalf("status with alias: url %q detail %q", u, d)
+	}
+	urls, err := n.WaitReady(t.Context(), "blog")
+	if err != nil || !slices.Equal(urls, []string{n.URL("blog")}) {
+		t.Fatalf("WaitReady with alias = %v, %v", urls, err)
+	}
+	if got := n.URLs("blog"); !slices.Equal(got, urls) {
+		t.Fatalf("URLs with alias = %v, want %v", got, urls)
 	}
 	waitFor(t, func() bool {
 		b, _ := os.ReadFile(n.aliasPath("blog"))
@@ -984,7 +993,7 @@ func TestAliasShownAndLossWarned(t *testing.T) {
 		t.Errorf("alias file mode: %v %v", fi, err)
 	}
 
-	// Canonical fallback: the relay no longer grants the alias.
+	// Losing the alias does not change the canonical URL.
 	f.set(ready(relay, canonical))
 	waitFor(t, func() bool {
 		return n.URL("blog") == "https://blog-0123456789abcdef0123456789abcdef01234567.m-relay.example"
@@ -1014,7 +1023,7 @@ func TestAliasShownAndLossWarned(t *testing.T) {
 	f2.set(aliased(relay, canonical, alias))
 	waitFor(t, func() bool {
 		u, d := hostDetail(n2, "blog")
-		return u == "https://blog.m-relay.example" && !strings.Contains(d, "no longer granted")
+		return u == "https://blog-0123456789abcdef0123456789abcdef01234567.m-relay.example" && !strings.Contains(d, "no longer granted")
 	})
 }
 
@@ -1036,8 +1045,8 @@ func TestNoAliasWarningWithoutEarlierAlias(t *testing.T) {
 	}
 }
 
-// A corrupt or JSON-null alias file is ignored instead of breaking the
-// watcher, and the next granted alias replaces it.
+// A corrupt or JSON-null alias file does not break the watcher, and a
+// newly granted alias can still be remembered for future warnings.
 func TestAliasFileCorruptOrNull(t *testing.T) {
 	const relay = "https://m-relay.example"
 	for _, content := range []string{"null\n", "{not json", "[]"} {
@@ -1050,7 +1059,7 @@ func TestAliasFileCorruptOrNull(t *testing.T) {
 			t.Fatal(err)
 		}
 		ff.last(t).set(aliased(relay, "https://blog-x.m-relay.example:443", "https://blog.m-relay.example:443"))
-		waitFor(t, func() bool { return n.URL("blog") == "https://blog.m-relay.example" })
+		waitFor(t, func() bool { return n.URL("blog") == "https://blog-x.m-relay.example" })
 		waitFor(t, func() bool {
 			b, _ := os.ReadFile(n.aliasPath("blog"))
 			return strings.Contains(string(b), `"https://m-relay.example":"https://blog.m-relay.example"`)
@@ -1068,7 +1077,7 @@ func TestNoAliasWarningForDeselectedRelay(t *testing.T) {
 	}
 	f := ff.last(t)
 	f.set(aliased(relay, "https://blog-x.m-relay.example:443", "https://blog.m-relay.example:443"))
-	waitFor(t, func() bool { return n.URL("blog") == "https://blog.m-relay.example" })
+	waitFor(t, func() bool { return n.URL("blog") == "https://blog-x.m-relay.example" })
 	gone := ready(relay, "https://blog-x.m-relay.example:443")
 	gone.Deselected = true
 	f.set(gone)
