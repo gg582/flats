@@ -298,11 +298,11 @@ func tailscaleAuthKey(c *config.Config, legacy bool, logf func(string, ...any)) 
 		}
 	}
 	if path := c.Credentials.TailscaleAuthKeyFile; path != "" {
-		b, err := os.ReadFile(path)
+		key, err := readAuthKeyFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read auth key file: %w", err)
 		}
-		return strings.TrimSpace(string(b)), nil
+		return key, nil
 	}
 	if key := os.Getenv("TS_AUTHKEY"); key != "" {
 		logf("warning: using TS_AUTHKEY from the environment; config.json cannot record it, so move the key to a 0600 file and set credentials.tailscale_authkey_file")

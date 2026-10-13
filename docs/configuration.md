@@ -53,7 +53,10 @@ OS user configuration directory under `flats-client/`, only the CLI and
 ```
 
 The Tailscale auth key stays outside the data directory and outside anything
-agents can read; `config.json` holds only its path.
+agents can read; `config.json` holds only its path. On Linux and macOS, this
+must be a regular file owned by the running Flats user with no group or other
+permissions (`chmod 600` is sufficient). Symlinks and files larger than 4 KiB
+are refused. Keep the file in an operator-controlled directory.
 
 ### What to back up
 
