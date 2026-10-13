@@ -293,7 +293,7 @@ func TestPrivateServeStopRetireStablePorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if url != "http://host.netbird.cloud:21000" {
+	if url != "http://host.netbird.cloud:22000" {
 		t.Fatalf("url = %q", url)
 	}
 	f := last(cs, mu)
@@ -303,11 +303,11 @@ func TestPrivateServeStopRetireStablePorts(t *testing.T) {
 	if got := get(t, f.listeners[0], map[string]string{"Tailscale-User-Login": "evil", "Tailscale_User_Name": "evil"}); got != "hi |" {
 		t.Fatalf("identity headers leaked: %q", got)
 	}
-	if f.addrs[0] != ":21000" {
+	if f.addrs[0] != ":22000" {
 		t.Fatalf("addr = %q", f.addrs[0])
 	}
 	u2, err := n.ServePrivate(context.Background(), "beta", okHandler)
-	if err != nil || u2 != "http://host.netbird.cloud:21001" {
+	if err != nil || u2 != "http://host.netbird.cloud:22001" {
 		t.Fatalf("beta %q %v", u2, err)
 	}
 	if n.PrivateURL("alpha") != url || n.PublicURL("alpha") != "" {
@@ -346,7 +346,7 @@ func TestPrivateServeStopRetireStablePorts(t *testing.T) {
 	if err := n2.RetirePrivate("alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := n2.ServePrivate(context.Background(), "gamma", okHandler); u != "http://host.netbird.cloud:21000" {
+	if u, _ := n2.ServePrivate(context.Background(), "gamma", okHandler); u != "http://host.netbird.cloud:22000" {
 		t.Fatalf("gamma reuses the freed port: %q", u)
 	}
 	if err := n2.StopPrivate("unknown"); err != nil {
@@ -367,7 +367,7 @@ func TestPrivateFallsBackToIP(t *testing.T) {
 	}
 	t.Cleanup(func() { newClient = old })
 	n := newNet(t, dir)
-	if u, err := n.ServePrivate(context.Background(), "a", okHandler); err != nil || u != "http://100.64.0.9:21000" {
+	if u, err := n.ServePrivate(context.Background(), "a", okHandler); err != nil || u != "http://100.64.0.9:22000" {
 		t.Fatalf("%q %v", u, err)
 	}
 }
@@ -383,14 +383,14 @@ func TestPublicServeExposeFieldsAndStop(t *testing.T) {
 		t.Fatalf("url = %q", url)
 	}
 	f := last(cs, mu)
-	if len(f.requests) != 1 || f.requests[0] != (exposeRequest{NamePrefix: "blog", Port: 21000}) {
+	if len(f.requests) != 1 || f.requests[0] != (exposeRequest{NamePrefix: "blog", Port: 23000}) {
 		t.Fatalf("requests %+v", f.requests)
 	}
 	if got := get(t, f.listeners[0], map[string]string{"tailscale-user-login": "evil"}); got != "hi |" {
 		t.Fatalf("leaked: %q", got)
 	}
 	// Private and public ports are independent.
-	if u, _ := n.ServePrivate(context.Background(), "blog", okHandler); !strings.HasSuffix(u, ":21001") {
+	if u, _ := n.ServePrivate(context.Background(), "blog", okHandler); !strings.HasSuffix(u, ":22000") {
 		t.Fatalf("private port %q", u)
 	}
 	if st := n.PublicStatus(); st.Kind != "netbird-expose" || len(st.Hosts) != 1 || st.Hosts[0].State != "ready" || st.Hosts[0].URL != url {
@@ -414,7 +414,7 @@ func TestPublicServeExposeFieldsAndStop(t *testing.T) {
 	if u, err := n.ServePublic(context.Background(), "blog", okHandler); err != nil || u == "" {
 		t.Fatal(err)
 	}
-	if r := f.requests; r[len(r)-1].Port != 21000 {
+	if r := f.requests; r[len(r)-1].Port != 23000 {
 		t.Fatalf("port changed after stop: %+v", r)
 	}
 	if err := n.RetirePublic("blog"); err != nil {
@@ -598,9 +598,8 @@ func TestIdentityHeader(t *testing.T) {
 	}
 }
 
-// A retired public port stays out of the pool until the quarantine ends:
-// NetBird only logs a failed StopExpose, so the proxy may still forward to the
-// old port. A private flat must not inherit it.
+// A retired public port is never reused, even if an old persisted
+// quarantine timestamp is already past. Public and private pools are disjoint.
 func TestRetiredPublicPortIsQuarantined(t *testing.T) {
 	install(t)
 	dir := enrolled(t)
@@ -613,30 +612,124 @@ func TestRetiredPublicPortIsQuarantined(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, err := n.ServePrivate(ctx, "notes", okHandler)
-	if err != nil || strings.HasSuffix(u, ":21000") {
-		t.Fatalf("a private flat reused the retired public port: %q %v", u, err)
+	if err != nil || !strings.HasSuffix(u, ":22000") {
+		t.Fatalf("a private flat received the wrong port: %q %v", u, err)
 	}
-	// Retiring a private port still frees it at once.
 	if err := n.RetirePrivate("notes"); err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := n.ServePrivate(ctx, "again", okHandler); !strings.HasSuffix(u, ":21001") {
-		t.Fatalf("a retired private port was not reused: %q", u)
+	if u, err := n.ServePrivate(ctx, "again", okHandler); err != nil || !strings.HasSuffix(u, ":22000") {
+		t.Fatalf("private port was not reused: %q %v", u, err)
 	}
-	// After the quarantine the port is available again.
-	old := quarantineTTL
-	quarantineTTL = -time.Second
-	defer func() { quarantineTTL = old }()
+
 	p, err := readPorts(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.quarantine(21000, time.Now())
-	if !p.expire(time.Now()) {
-		t.Fatal("an ended quarantine was not dropped")
+	if _, ok := p[quarantinePrefix+"23000"]; !ok {
+		t.Fatalf("retired public port was not reserved: %v", p)
 	}
-	if port, _, err := p.allocate("private/late"); err != nil || port != 21000 {
-		t.Fatalf("port after the quarantine = %d, %v", port, err)
+	// Legacy records contain absolute expiry times. An expired timestamp
+	// must no longer make the port reusable.
+	p[quarantinePrefix+"23000"] = int(time.Now().Add(-7 * 24 * time.Hour).Unix())
+	if err := writeJSON(filepath.Join(dir, portsFile), p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.ServePublic(ctx, "next", okHandler); err != nil {
+		t.Fatal(err)
+	}
+	p, err = readPorts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["public/next"] != 23001 {
+		t.Fatalf("expired quarantine was reused: %v", p)
+	}
+}
+
+// Old installations recorded both roles in 21000-21999. Both must move to
+// new ranges to avoid exposing a private flat to an already-expired old URL.
+func TestLegacyPortsMigrateAwayFromStalePublicRoutes(t *testing.T) {
+	install(t)
+	dir := enrolled(t)
+	legacy := ports{
+		"private/notes":       21000,
+		"public/blog":         21001,
+		quarantinePrefix + "21002": int(time.Now().Add(-7 * 24 * time.Hour).Unix()),
+	}
+	if err := writeJSON(filepath.Join(dir, portsFile), legacy); err != nil {
+		t.Fatal(err)
+	}
+	n := newNet(t, dir)
+	ctx := context.Background()
+	privateURL, err := n.ServePrivate(ctx, "notes", okHandler)
+	if err != nil || !strings.HasSuffix(privateURL, ":22000") {
+		t.Fatalf("legacy private port did not migrate: %q %v", privateURL, err)
+	}
+	if _, err := n.ServePublic(ctx, "blog", okHandler); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readPorts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["private/notes"] != 22000 || p["public/blog"] != 23000 {
+		t.Fatalf("legacy port reservations were not migrated: %v", p)
+	}
+	for _, oldPort := range []int{21000, 21001, 21002} {
+		if _, ok := p[fmt.Sprintf("%s%d", quarantinePrefix, oldPort)]; !ok {
+			t.Fatalf("old port %d was not permanently reserved: %v", oldPort, p)
+		}
+	}
+	if _, err := n.ServePublic(ctx, "other", okHandler); err != nil {
+		t.Fatal(err)
+	}
+	p, err = readPorts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["public/other"] != 23001 {
+		t.Fatalf("new public listener reused the old range: %v", p)
+	}
+
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n2 := newNet(t, dir)
+	if url, err := n2.ServePrivate(ctx, "notes", okHandler); err != nil || url != privateURL {
+		t.Fatalf("migrated private port changed after restart: %q %v", url, err)
+	}
+	if _, err := n2.ServePublic(ctx, "blog", okHandler); err != nil {
+		t.Fatal(err)
+	}
+	p, err = readPorts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["public/blog"] != 23000 {
+		t.Fatalf("migrated public port changed after restart: %v", p)
+	}
+}
+
+// Exhaustion must fail closed rather than borrow an unsafe port from another
+// role or a retired public route.
+func TestPublicPortExhaustionDoesNotBorrowPrivatePorts(t *testing.T) {
+	p := ports{}
+	for port := publicPortMin; port <= publicPortMax; port++ {
+		p.quarantine(port)
+	}
+	if port, _, err := p.allocate("public/next"); err == nil {
+		t.Fatalf("public allocation succeeded with full quarantine at %d", port)
+	}
+	if port, added, err := p.allocate("private/notes"); err != nil || !added || port != privatePortMin {
+		t.Fatalf("private pool not isolated: port=%d added=%t err=%v", port, added, err)
+	}
+}
+
+func TestInvalidStoredPortDoesNotCrossRoles(t *testing.T) {
+	p := ports{"private/notes": publicPortMin}
+	if port, _, err := p.allocate("private/notes"); err == nil {
+		t.Fatalf("invalid private reservation accepted on public port %d", port)
 	}
 }
 
@@ -670,11 +763,11 @@ func TestRetireStoredWithoutBackend(t *testing.T) {
 	if _, ok := p["public/blog"]; ok {
 		t.Fatalf("public record kept: %v", p)
 	}
-	if _, ok := p[quarantinePrefix+"21001"]; !ok {
+	if _, ok := p[quarantinePrefix+"23000"]; !ok {
 		t.Fatalf("public port not quarantined: %v", p)
 	}
 	n2 := newNet(t, dir)
-	if u, _ := n2.ServePrivate(ctx, "new", okHandler); !strings.HasSuffix(u, ":21000") {
+	if u, _ := n2.ServePrivate(ctx, "new", okHandler); !strings.HasSuffix(u, ":22000") {
 		t.Fatalf("the freed private port is not reused first: %q", u)
 	}
 }
