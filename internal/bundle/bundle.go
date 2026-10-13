@@ -37,6 +37,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gosuda/flats/internal/contenttype"
+	"github.com/gosuda/flats/internal/safedir"
 )
 
 // ManifestName is the optional manifest at the bundle root.
@@ -275,13 +276,17 @@ func (c *collector) readZip(raw []byte) error {
 
 // FromDir reads a local directory (used by the CLI and loopback callers).
 func FromDir(dir string, lim Limits) ([]File, error) {
+	rooted, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer rooted.Close()
+
 	c := newCollector(lim)
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(rooted.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(dir, p)
-		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			if rel != "." && (d.Name() == ".git" || d.Name() == "node_modules") {
 				return filepath.SkipDir
@@ -292,11 +297,7 @@ func FromDir(dir string, lim Limits) ([]File, error) {
 			c.verr.add(rel, "links and special files are not allowed", "copy the target file into the build instead of linking it")
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		f, err := os.Open(p)
+		f, info, err := safedir.OpenRegular(rooted, rel)
 		if err != nil {
 			return err
 		}
