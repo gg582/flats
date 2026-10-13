@@ -55,6 +55,20 @@ restart a service or upgrade the remote server.
 
 ### Standalone skills and managed plugins
 
+A revision number is insufficient to establish that installed skill bytes are
+current. For a local check, the CLI hashes the exact installed file and reports
+`current` only when its digest matches both the server manifest and the
+publisher skill embedded in the running CLI. Agents that cannot inspect the
+installed bytes must report an unknown bootstrap status rather than assume it
+is current.
+
+The server's digest is not a publisher signature. Standalone sync installs only
+the exact skill embedded in this CLI, rejecting any other server-supplied bytes
+with `untrusted_skill`, even if their stated revision and digest agree. Obtain
+a newer CLI from a trusted Flats release before syncing a newer publisher skill.
+A different host cannot select different persistent instructions. This does
+not authenticate live server guidance.
+
 For an explicitly identified standalone skill, use its chosen SKILL.md path:
 
 ```sh
@@ -63,7 +77,7 @@ flats --url https://flats.example.ts.net --json skill sync --output /chosen/stan
 
 A different existing file requires `--expected-sha256 <current-file-hash>`;
 `client check --skill-file` supplies that digest. Inspect user changes before
-replacing them. Identical content is a no-op. Symlink files are refused. No
+replacing them. Identical trusted content is a no-op. Symlink files are refused. No
 agent directories are guessed or scanned. Arbitrary external editors are not
 transactionally coordinated with this operation.
 
