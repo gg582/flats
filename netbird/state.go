@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -19,8 +17,15 @@ const (
 	dnsFile     = "netbird-dns.json" // embed's state file
 	portsFile   = "ports.json"
 
-	portMin = 21000
-	portMax = 21999
+	// All previous releases allocated both roles from 21000-21999. Old
+	// public proxies may still forward there after their local records expire.
+	legacyPortMin = 21000
+	legacyPortMax = 21999
+
+	privatePortMin = 22000
+	privatePortMax = 22999
+	publicPortMin  = 23000
+	publicPortMax  = 23999
 )
 
 // Account describes the enrolled NetBird peer. It holds no secrets.
@@ -83,15 +88,15 @@ func writeJSON(path string, v any) error {
 	return nil
 }
 
-// ports maps "private/<host>" and "public/<slug>" to the overlay TCP port
-// reserved for it. Both roles share one pool so a Public flat's private
-// route never collides with its public listener.
+// ports maps "private/<host>" and "public/<slug>" to their overlay TCP
+// ports. The roles use disjoint ranges, neither of which overlaps the
+// historical shared pool. This also protects against stale public routes
+// whose old quarantine records have already expired.
 //
-// A retired public port is quarantined under "quarantine/<port>", whose value
-// is the Unix time it may be reused. NetBird's expose termination is
-// best-effort (the client only logs a failed StopExpose), so the proxy may keep
-// forwarding to that port until the service expires on the management side.
-// Reusing the port at once could put another flat behind the old public URL.
+// "quarantine/<port>" permanently reserves a retired public port, or a
+// migrated legacy port, because ending a local NetBird expose session does
+// not prove that the remote proxy stopped forwarding. Old quarantine records
+// contain expiry timestamps; their values are deliberately ignored.
 type ports map[string]int
 
 // portsMu guards ports.json across every Net and RetireStored.
@@ -114,7 +119,7 @@ func RetireStored(dir, host string) error {
 	}
 	if port, ok := p[key(rolePublic, host)]; ok {
 		delete(p, key(rolePublic, host))
-		p.quarantine(port, time.Now())
+		p.quarantine(port)
 		changed = true
 	}
 	if !changed {
@@ -124,9 +129,6 @@ func RetireStored(dir, host string) error {
 }
 
 const quarantinePrefix = "quarantine/"
-
-// quarantineTTL is how long a retired public port stays unavailable.
-var quarantineTTL = 24 * time.Hour
 
 // quarantinedPort parses a quarantine key.
 func quarantinedPort(key string) (int, bool) {
@@ -138,21 +140,10 @@ func quarantinedPort(key string) (int, bool) {
 	return v, err == nil
 }
 
-// quarantine keeps port out of the pool until now+quarantineTTL.
-func (p ports) quarantine(port int, now time.Time) {
-	p[quarantinePrefix+strconv.Itoa(port)] = int(now.Add(quarantineTTL).Unix())
-}
-
-// expire drops quarantines that ended and reports whether any did.
-func (p ports) expire(now time.Time) bool {
-	changed := false
-	for k, until := range p {
-		if _, ok := quarantinedPort(k); ok && int64(until) <= now.Unix() {
-			delete(p, k)
-			changed = true
-		}
-	}
-	return changed
+// quarantine reserves a port indefinitely. No expiry is safe without proof
+// that NetBird deleted every remote forwarding rule for that port.
+func (p ports) quarantine(port int) {
+	p[quarantinePrefix+strconv.Itoa(port)] = 1
 }
 
 func readPorts(dir string) (ports, error) {
@@ -170,30 +161,47 @@ func readPorts(dir string) (ports, error) {
 	return p, nil
 }
 
-// allocate returns key's port, reserving the lowest free one if needed.
-func (p ports) allocate(key string) (port int, added bool, err error) {
-	if v, ok := p[key]; ok {
-		return v, false, nil
+// allocate returns key's port, migrating reservations from the historical
+// shared range before returning a listener address.
+func (p ports) allocate(k string) (port int, added bool, err error) {
+	var start, end int
+	switch {
+	case strings.HasPrefix(k, rolePrivate+"/"):
+		start, end = privatePortMin, privatePortMax
+	case strings.HasPrefix(k, rolePublic+"/"):
+		start, end = publicPortMin, publicPortMax
+	default:
+		return 0, false, fmt.Errorf("unknown overlay port role for %q", k)
 	}
-	p.expire(time.Now())
-	used := make([]int, 0, len(p))
+
+	if previous, ok := p[k]; ok {
+		switch {
+		case previous >= start && previous <= end:
+			return previous, false, nil
+		case previous >= legacyPortMin && previous <= legacyPortMax:
+			// An old port may still have an Internet proxy attached.
+			// Never bind a current private or public route to it.
+			p.quarantine(previous)
+			delete(p, k)
+		default:
+			return 0, false, fmt.Errorf("invalid stored overlay port %d for %q", previous, k)
+		}
+	}
+
+	used := make(map[int]struct{}, len(p))
 	for k, v := range p {
 		if q, ok := quarantinedPort(k); ok {
-			used = append(used, q)
+			used[q] = struct{}{}
+		} else {
+			used[v] = struct{}{}
+		}
+	}
+	for candidate := start; candidate <= end; candidate++ {
+		if _, reserved := used[candidate]; reserved {
 			continue
 		}
-		used = append(used, v)
+		p[k] = candidate
+		return candidate, true, nil
 	}
-	sort.Ints(used)
-	next := portMin
-	for _, v := range used {
-		if v == next {
-			next++
-		}
-	}
-	if next > portMax {
-		return 0, false, fmt.Errorf("no free overlay port in %d-%d", portMin, portMax)
-	}
-	p[key] = next
-	return next, true, nil
+	return 0, false, fmt.Errorf("no free overlay port in %d-%d", start, end)
 }
