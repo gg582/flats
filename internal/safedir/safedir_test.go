@@ -61,6 +61,38 @@ func TestOpenCheckedRejectsSameSizeReplacement(t *testing.T) {
 	}
 }
 
+func TestOpenCheckedRejectsSymlinkSwap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(path, []byte("public"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	before, err := root.Lstat("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, filepath.Join(dir, "old.html")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	f, _, err := openChecked(root, "index.html", before)
+	if err == nil {
+		f.Close()
+		t.Fatal("followed a swapped symlink outside the root")
+	}
+}
+
 func TestOpenRegularRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "saved"), []byte("secret"), 0o600); err != nil {
