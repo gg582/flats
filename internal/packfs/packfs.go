@@ -47,7 +47,13 @@ func openChecked(root *os.Root, name string, before fs.FileInfo) (*os.File, fs.F
 		f.Close()
 		return nil, nil, err
 	}
-	if !info.Mode().IsRegular() || !os.SameFile(before, info) {
+	current, err := root.Lstat(filepath.FromSlash(name))
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() || !current.Mode().IsRegular() ||
+		!os.SameFile(before, info) || !os.SameFile(current, info) {
 		f.Close()
 		return nil, nil, fmt.Errorf("%s changed while packing", name)
 	}

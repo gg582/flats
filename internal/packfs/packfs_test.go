@@ -33,7 +33,7 @@ func TestOpenRegular(t *testing.T) {
 }
 
 func TestOpenRegularRejectsReplacements(t *testing.T) {
-	for _, kind := range []string{"file symlink", "parent symlink", "same-size regular file", "internal symlink"} {
+	for _, kind := range []string{"file symlink", "parent symlink", "same-size regular file", "internal symlink", "same-inode symlink"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			outside := t.TempDir()
@@ -79,6 +79,14 @@ func TestOpenRegularRejectsReplacements(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Rename(replacement, name); err != nil {
+					t.Fatal(err)
+				}
+			case "same-inode symlink":
+				saved := filepath.Join(assets, "saved.html")
+				if err := os.Rename(name, saved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("saved.html", name); err != nil {
 					t.Fatal(err)
 				}
 			case "internal symlink":
