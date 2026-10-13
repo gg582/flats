@@ -10,9 +10,10 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gosuda/flats/internal/packfs"
 )
 
 // packStats describes a packed directory.
@@ -46,22 +47,14 @@ func packDir(root string, limit int64) ([]byte, packStats, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == root {
+	err := packfs.WalkDir(root, func(rel string, d fs.DirEntry, rooted *os.Root) error {
+		if rel == "." {
 			return nil
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if skipEntry(d.Name(), d.IsDir()) {
 			st.Skipped++
 			if d.IsDir() {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
@@ -74,10 +67,11 @@ func packDir(root string, limit int64) ([]byte, packStats, error) {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s is not a regular file; remove it from the build output", rel)
 		}
-		info, err := d.Info()
+		f, info, err := packfs.OpenRegular(rooted, rel)
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 		st.Files++
 		st.Bytes += info.Size()
 		if limit > 0 && st.Bytes > limit {
@@ -94,11 +88,6 @@ func packDir(root string, limit int64) ([]byte, packStats, error) {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
 		n, err := io.Copy(tw, f)
 		if err != nil {
 			return err

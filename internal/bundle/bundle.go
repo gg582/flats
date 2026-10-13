@@ -37,6 +37,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gosuda/flats/internal/contenttype"
+	"github.com/gosuda/flats/internal/packfs"
 )
 
 // ManifestName is the optional manifest at the bundle root.
@@ -276,15 +277,10 @@ func (c *collector) readZip(raw []byte) error {
 // FromDir reads a local directory (used by the CLI and loopback callers).
 func FromDir(dir string, lim Limits) ([]File, error) {
 	c := newCollector(lim)
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(dir, p)
-		rel = filepath.ToSlash(rel)
+	err := packfs.WalkDir(dir, func(rel string, d fs.DirEntry, root *os.Root) error {
 		if d.IsDir() {
 			if rel != "." && (d.Name() == ".git" || d.Name() == "node_modules") {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
@@ -292,11 +288,7 @@ func FromDir(dir string, lim Limits) ([]File, error) {
 			c.verr.add(rel, "links and special files are not allowed", "copy the target file into the build instead of linking it")
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		f, err := os.Open(p)
+		f, info, err := packfs.OpenRegular(root, rel)
 		if err != nil {
 			return err
 		}
