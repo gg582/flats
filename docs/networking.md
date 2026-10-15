@@ -199,7 +199,10 @@ and/or NetBird Expose, then allow them on a flat.
 **Disconnect peer** deletes the peer identity from this machine; turn both
 providers off first. NetBird's embedded client cannot remove a peer, so remove
 it in the NetBird dashboard (Peers) and revoke a reusable setup key. If the peer
-was removed in the dashboard, connect again with a new key. Deleting a flat
+was removed in the dashboard, NetBird no longer recognises it: opening a NetBird
+route fails with that message, and the NetBird panels show the peer as **Not
+recognised by NetBird**. Turn both NetBird providers off, disconnect the peer,
+and connect again with a new setup key. Deleting a flat
 ends its expose session and releases its port; a public flat's port stays
 out of use for 24 hours, because NetBird only logs a failed attempt to end an
 expose session and its proxy might still forward to that port.

@@ -42,6 +42,7 @@ type ProviderInfo struct {
 	MgmtURL     string          `json:"management_url,omitempty"` // netbird: the management server
 	InUse       bool            `json:"in_use,omitempty"`         // netbird: a NetBird provider is on, so the peer cannot be disconnected
 	Unsupported string          `json:"unsupported,omitempty"`    // netbird: why this build cannot use it
+	PeerProblem string          `json:"peer_problem,omitempty"`   // netbird: why the connected peer cannot connect
 }
 
 // legacyNetworkPins names the legacy service flags that fix a provider's
@@ -128,6 +129,9 @@ func (h *Host) NetworkProviders(ctx context.Context) any {
 				}
 			}
 			if nn != nil {
+				if p.Connected {
+					p.PeerProblem = nn.PeerProblem()
+				}
 				if id == provider.Netbird {
 					st := nn.PrivateStatus()
 					p.Status = &st

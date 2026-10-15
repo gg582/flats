@@ -903,6 +903,24 @@ const nbFacts = all(byId(nbMain2, 'provider-netbird'), (e) => e.tagName === 'COD
 assert.deepEqual(nbFacts, ['flats-box', 'https://nb.example'], 'the connected peer is identified');
 assert.equal(byText(byId(nbMain2, 'provider-netbird'), 'Disconnect peer').length, 1, 'a connected peer can be disconnected');
 assert.equal(byText(byId(nbMain2, 'provider-netbird'), 'Turn on').length, 1, 'a connected peer can be turned on');
+const peerState = (panel) => all(panel, (e) => e.tagName === 'DD').map((e) => e.textContent)[0];
+assert.equal(peerState(byId(nbMain2, 'provider-netbird')), 'Connected', 'a working peer shows no problem');
+
+// A peer NetBird management refused shows why, and how to fix it, on both
+// NetBird panels; the private panel still offers the disconnect.
+const nbProblem = 'NetBird no longer recognises this host\u2019s peer; connect again with a new setup key';
+routes['GET /console/api/providers'] = { providers: [provider('local', 'private', true),
+  { ...provider('netbird', 'private', true), management_url: 'https://nb.example', connected: true, device_name: 'flats-box', in_use: true, peer_problem: nbProblem },
+  { ...provider('netbird-expose', 'public', false), management_url: 'https://nb.example', connected: true, device_name: 'flats-box', in_use: true, peer_problem: nbProblem }] };
+const nbMain4 = new Element('main');
+settingsPage.mount(nbMain4, [], ctx);
+await tick();
+for (const id of ['provider-netbird', 'provider-netbird-expose']) {
+  const panel = byId(nbMain4, id);
+  assert.equal(peerState(panel), 'Not recognised by NetBird', `${id}: the peer state names the rejection`);
+  assert.ok(panel.textContent.includes(nbProblem), `${id}: the problem and its fix are shown`);
+}
+assert.equal(byText(byId(nbMain4, 'provider-netbird'), 'Disconnect peer').length, 1, 'the rejected peer can still be disconnected');
 
 // --- loopback links seen from another device ---
 // A loopback URL opens the viewer's own machine, so a console opened over

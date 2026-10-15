@@ -91,7 +91,9 @@ func storedPrivateKey(path string) (string, error) {
 // stored in ConfigPath as PrivateKey, which equals what New would load from
 // the file anyway and satisfies the validation without any new secret. If
 // management no longer knows the peer (removed in the dashboard), Login
-// fails with a registration error and the operator must enroll again.
+// falls back to registration with the empty setup key and fails with a
+// misleading setup-key error; Net reports it as ErrPeerRejected, and the
+// operator must enroll again.
 type embedClient struct {
 	c *embed.Client
 }

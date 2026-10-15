@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/gosuda/flats/internal/core"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Config configures a Net.
@@ -81,6 +83,10 @@ type Net struct {
 	entries map[string]*entry
 	locks   map[string]*sync.Mutex
 	ops     sync.WaitGroup
+	// rejected is the fingerprint of the enrolled peer NetBird management
+	// last refused to log in, or "". It is kept under mu, not cmu, so the
+	// console can read it while a start is in progress.
+	rejected string
 }
 
 type entry struct {
@@ -201,10 +207,59 @@ func (n *Net) ensureClient(ctx context.Context) (client, error) {
 	sctx, cancel := context.WithTimeout(ctx, startTimeout)
 	defer cancel()
 	if err := c.Start(sctx); err != nil {
+		if isPeerRejected(err) {
+			n.logf("netbird: NetBird management refused the stored peer identity: %v", err)
+			n.setRejected(acct.Fingerprint)
+			return nil, ErrPeerRejected
+		}
 		return nil, fmt.Errorf("netbird: connect to NetBird: %w", err)
 	}
+	n.setRejected("")
 	n.c, n.acct = c, acct
 	return c, nil
+}
+
+// ErrPeerRejected is returned when the enrolled peer restarts from its stored
+// identity and NetBird management no longer accepts that identity.
+var ErrPeerRejected = errors.New("netbird: NetBird no longer recognises this host's peer (it may have been removed in the NetBird dashboard); turn the NetBird providers off, disconnect the peer, and connect again with a new setup key")
+
+// registrationFallbackMsg is the error NetBird v0.80.0's auth.Login reports
+// when management answers PermissionDenied to the login with the stored key
+// pair and it falls back to registering with the (empty) setup key:
+// registerPeer parses "" as a UUID and fails before contacting management.
+// The original PermissionDenied reason is lost.
+const registrationFallbackMsg = "invalid setup-key or no sso information provided"
+
+// isPeerRejected reports whether err from a restart (no setup key) means
+// management refused the stored peer identity. Only ensureClient calls it:
+// a restart never passes a setup key, so the registration fallback can only
+// fail this way after management rejected the peer.
+func isPeerRejected(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.InvalidArgument && strings.Contains(st.Message(), registrationFallbackMsg)
+}
+
+func (n *Net) setRejected(fingerprint string) {
+	n.mu.Lock()
+	n.rejected = fingerprint
+	n.mu.Unlock()
+}
+
+// PeerProblem describes why the enrolled peer cannot connect, for the
+// console, or returns "" when no such problem is known. It reports a
+// rejection only while the same peer is still enrolled, so a new
+// enrollment clears it.
+func (n *Net) PeerProblem() string {
+	n.mu.Lock()
+	fp := n.rejected
+	n.mu.Unlock()
+	if fp == "" {
+		return ""
+	}
+	if a, ok, err := LoadAccount(n.cfg.Dir); err != nil || !ok || a.Fingerprint != fp {
+		return ""
+	}
+	return strings.TrimPrefix(ErrPeerRejected.Error(), "netbird: ")
 }
 
 // Account returns the enrolled peer's fingerprint for policy tokens, or ""

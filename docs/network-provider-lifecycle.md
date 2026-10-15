@@ -486,6 +486,14 @@ providers are off and after `Manager.DetachNetbird` (which refuses while a
 NetBird route is registered and waits for opens in flight). The embedded client
 cannot deregister a peer, so the peer remains in the NetBird account.
 
+A restart logs in with the stored key pair and no setup key. When management
+refuses that peer (for example, it was removed in the dashboard), NetBird
+v0.80.0 falls back to registering with the empty setup key and reports a
+misleading `invalid setup-key` error. `ensureClient` recognises that error and
+returns `netbird.ErrPeerRejected` instead, and `PeerProblem` reports it (as the
+console's `peer_problem`) while the same peer stays enrolled; a successful start
+or a new enrollment clears it.
+
 `StopPublicRoutes` calls `StopPublic` (session ended, port kept) even without a
 registered route. `StopProviderRoutes(…, netbird)` and `StopExposure` call
 `StopPrivate`. `StopSlug` calls `RetirePublic` then `RetirePrivate`, which free

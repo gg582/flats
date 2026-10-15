@@ -614,6 +614,42 @@ func (*fakeNetbirdNet) ServePublic(context.Context, string, http.Handler) (strin
 	return "", errors.New("not used")
 }
 
+// fakeNetbirdProblem is what every fakeNetbirdNet reports as PeerProblem.
+// Tests that register the NetBird driver are not parallel.
+var fakeNetbirdProblem string
+
+func (*fakeNetbirdNet) PeerProblem() string { return fakeNetbirdProblem }
+
+// A peer NetBird no longer recognises is reported on both NetBird providers
+// while it is connected, so the console can tell the operator to enroll again.
+func TestConsoleNetbirdPeerProblem(t *testing.T) {
+	provider.RegisterNetbird(fakeNetbirdDriver{})
+	t.Cleanup(func() { provider.RegisterNetbird(nil) })
+	const problem = "NetBird no longer recognises this host's peer"
+	fakeNetbirdProblem = problem
+	t.Cleanup(func() { fakeNetbirdProblem = "" })
+	dir := t.TempDir()
+	h, client := consoleHostWith(t, dir, nil)
+	if code, out := setHost(t, h, client, "netbird", true); code != 200 {
+		t.Fatalf("turn on netbird: %d %v", code, out)
+	}
+	if p := providerByID(t, h, client, "netbird"); p.Connected || p.PeerProblem != "" {
+		t.Fatalf("netbird without a peer: %+v", p)
+	}
+	nbDir := filepath.Join(dir, "netbird")
+	if err := os.MkdirAll(nbDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nbDir, "account.json"), []byte(`{"management_url":"https://api.netbird.io:443","device_name":"flats","fingerprint":"abc123"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"netbird", "netbird-expose"} {
+		if p := providerByID(t, h, client, id); !p.Connected || p.PeerProblem != problem {
+			t.Fatalf("%s with a rejected peer: %+v", id, p)
+		}
+	}
+}
+
 // Without a linked NetBird, the providers report why they cannot run and the
 // peer cannot be enrolled; the host keeps starting.
 func TestConsoleNetbirdNotBuilt(t *testing.T) {

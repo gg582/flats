@@ -13,6 +13,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const testSetupKey = "SETUPKEY-do-not-leak-0123456789"
@@ -731,5 +734,132 @@ func TestPublicExposeUsesBoundedPrefix(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.requests) != 1 || f.requests[0].NamePrefix != strings.Repeat("d", 32) {
 		t.Fatalf("expose requests = %+v", f.requests)
+	}
+}
+
+// rejectedLoginErr is what NetBird v0.80.0's embed Start returns when
+// management refuses the stored peer and auth.Login falls back to
+// registering with the empty setup key.
+var rejectedLoginErr = fmt.Errorf("login: %w", status.Error(codes.InvalidArgument,
+	"invalid setup-key or no sso information provided, err: invalid UUID length: 0"))
+
+// startErrFactory installs a client factory whose clients fail Start with
+// *startErr (nil succeeds) and report *pub as their public key.
+func startErrFactory(t *testing.T, startErr *error, pub *string) {
+	t.Helper()
+	old := newClient
+	var mu sync.Mutex
+	newClient = func(o clientOptions) (client, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		f := &fakeClient{opts: o, fqdn: "h.nb", pub: *pub}
+		if o.SetupKey == "" {
+			f.startErr = *startErr
+		}
+		return f, nil
+	}
+	t.Cleanup(func() { newClient = old })
+}
+
+func TestRestartRejectedPeerIsActionable(t *testing.T) {
+	var startErr error
+	pub := "PUBKEY=="
+	startErrFactory(t, &startErr, &pub)
+	dir := enrolled(t)
+	n := newNet(t, dir)
+	if p := n.PeerProblem(); p != "" {
+		t.Fatalf("PeerProblem before any start = %q", p)
+	}
+
+	startErr = rejectedLoginErr
+	for _, serve := range []func(context.Context, string, http.Handler) (string, error){n.ServePrivate, n.ServePublic} {
+		_, err := serve(context.Background(), "site", okHandler)
+		if !errors.Is(err, ErrPeerRejected) {
+			t.Fatalf("serve error = %v, want ErrPeerRejected", err)
+		}
+		for _, bad := range []string{"invalid setup-key", "UUID"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Fatalf("error still carries NetBird's misleading text %q: %v", bad, err)
+			}
+		}
+		for _, want := range []string{"no longer recognises this host's peer", "turn the NetBird providers off", "disconnect", "new setup key"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q lacks %q", err, want)
+			}
+		}
+	}
+	p := n.PeerProblem()
+	if p == "" || strings.HasPrefix(p, "netbird:") || !strings.Contains(p, "new setup key") {
+		t.Fatalf("PeerProblem = %q", p)
+	}
+
+	// A later successful start (for example the peer was restored in
+	// NetBird) clears the problem.
+	startErr = nil
+	if _, err := n.ServePrivate(context.Background(), "site", okHandler); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.PeerProblem(); p != "" {
+		t.Fatalf("PeerProblem after a successful start = %q", p)
+	}
+}
+
+func TestRejectedPeerProblemEndsWithItsEnrollment(t *testing.T) {
+	startErr := rejectedLoginErr
+	pub := "PUBKEY=="
+	startErrFactory(t, &startErr, &pub)
+	dir := enrolled(t)
+	n := newNet(t, dir)
+	if _, err := n.ServePrivate(context.Background(), "site", okHandler); !errors.Is(err, ErrPeerRejected) {
+		t.Fatalf("serve error = %v, want ErrPeerRejected", err)
+	}
+	if n.PeerProblem() == "" {
+		t.Fatal("expected a peer problem")
+	}
+	if err := Disconnect(context.Background(), dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.PeerProblem(); p != "" {
+		t.Fatalf("PeerProblem after disconnect = %q", p)
+	}
+	if d := n.PrivateStatus().Detail; d != "not connected" {
+		t.Fatalf("PrivateStatus detail after disconnect = %q", d)
+	}
+	// A new enrollment is a different peer: the old rejection does not apply.
+	pub = "NEWPUBKEY=="
+	if _, err := Enroll(context.Background(), dir, "", testSetupKey, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.PeerProblem(); p != "" {
+		t.Fatalf("PeerProblem after a new enrollment = %q", p)
+	}
+}
+
+func TestOtherStartFailuresAreNotPeerRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unreachable", errors.New("login: context deadline exceeded")},
+		{"permission denied", fmt.Errorf("login: %w", status.Error(codes.PermissionDenied, "peer login has expired"))},
+		{"other invalid argument", fmt.Errorf("login: %w", status.Error(codes.InvalidArgument, "bad request"))},
+		{"plain text match", errors.New("invalid setup-key or no sso information provided")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			startErr := tc.err
+			pub := "PUBKEY=="
+			startErrFactory(t, &startErr, &pub)
+			n := newNet(t, enrolled(t))
+			_, err := n.ServePrivate(context.Background(), "site", okHandler)
+			if err == nil || errors.Is(err, ErrPeerRejected) {
+				t.Fatalf("serve error = %v, want a non-rejection failure", err)
+			}
+			if !strings.Contains(err.Error(), "connect to NetBird") {
+				t.Fatalf("serve error = %v, want the connect failure", err)
+			}
+			if p := n.PeerProblem(); p != "" {
+				t.Fatalf("PeerProblem = %q", p)
+			}
+		})
 	}
 }

@@ -73,6 +73,7 @@ func (f *fakeNetbird) RetirePublic(slug string) error {
 func (f *fakeNetbird) PublicURL(slug string) string { return f.net.URL("nbx-" + slug) }
 func (f *fakeNetbird) PublicStatus() core.NetStatus { return f.status("nbx-", "netbird-expose") }
 func (f *fakeNetbird) Account() string              { return "peer-fingerprint" }
+func (f *fakeNetbird) PeerProblem() string          { return "" }
 func (f *fakeNetbird) Close() error                 { return nil }
 
 func (f *fakeNetbird) status(prefix, kind string) core.NetStatus {

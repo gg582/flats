@@ -131,6 +131,9 @@ type NetbirdNet interface {
 
 	// Account identifies the enrolled peer without revealing a secret.
 	Account() string
+	// PeerProblem says why the enrolled peer cannot connect (for example,
+	// NetBird no longer recognises it), or "" when no problem is known.
+	PeerProblem() string
 	Close() error
 }
 

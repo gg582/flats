@@ -306,14 +306,18 @@ function netbirdDetails(p, data, opts) {
   if (p.unsupported) return h('p', { class: 'alert alert-warn', text: p.unsupported });
   const facts = h('dl', { class: 'facts' },
     p.connected ? [
-      h('dt', { text: 'Peer' }), h('dd', { text: 'Connected' }),
+      h('dt', { text: 'Peer' }), h('dd', { text: p.peer_problem ? 'Not recognised by NetBird' : 'Connected' }),
       h('dt', { text: 'Name' }), h('dd', null, h('code', { text: p.device_name || '' })),
       h('dt', { text: 'Management server' }), h('dd', null, h('code', { text: p.management_url || '' })),
     ] : [h('dt', { text: 'Peer' }), h('dd', { text: 'Not connected' }),
       h('dt', { text: 'Management server' }), h('dd', null, h('code', { text: p.management_url || '' }))]);
   const hosts = p.enabled && p.status ? hostsTable(p.status) : null;
+  // NetBird management refused the stored peer (for example, it was removed
+  // in the dashboard): only a new enrollment fixes it.
+  const problem = p.connected && p.peer_problem
+    ? h('p', { class: 'alert alert-warn', role: 'status', text: p.peer_problem }) : null;
   if (p.id === 'netbird-expose') {
-    return [facts, h('p', { class: 'muted small', text: p.connected
+    return [facts, problem, h('p', { class: 'muted small', text: p.connected
       ? 'Uses the NetBird peer connected under NetBird. A public flat is exposed through NetBird’s reverse proxy, which needs the proxy feature on your NetBird account or server. Anyone can open the URL.'
       : 'Connect the NetBird peer under NetBird first.' }), hosts];
   }
@@ -350,7 +354,7 @@ function netbirdDetails(p, data, opts) {
     toast('NetBird peer disconnected.', 'success');
     await opts.reload();
   }));
-  return [facts, hosts, h('div', { class: 'form-actions' }, disconnect)];
+  return [facts, problem, hosts, h('div', { class: 'form-actions' }, disconnect)];
 }
 
 // netbirdKeyForm registers this machine as a NetBird peer with a setup key.
