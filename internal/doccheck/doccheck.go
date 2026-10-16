@@ -4,9 +4,8 @@
 // serve them outside the repository. It also reports, for review only,
 // Markdown files nothing reaches and lines that hold hash literals.
 //
-// Run it with `make docs-check` (errors only) or `make docs-audit` (the full
-// report). CI runs `make docs-check`; TestRepositoryDocs runs the same
-// error check under go test.
+// Run it with `make docs-check` (errors only, which CI runs) or
+// `make docs-audit` (the full report).
 package doccheck
 
 import (
@@ -149,12 +148,15 @@ func Check(root string, files []string) (*Report, error) {
 			if dest := strings.TrimSpace(l.dest); strings.HasPrefix(f, "docs/agent/") && dest != "" && !strings.HasPrefix(dest, "#") {
 				r.Errors = append(r.Errors, Finding{f, l.line, fmt.Sprintf("relative link %q in docs/agent/ breaks when served through MCP or llms.txt", l.dest)})
 			}
-			if target == ".." || strings.HasPrefix(target, "../") {
-				r.Errors = append(r.Errors, Finding{f, l.line, fmt.Sprintf("link %q points outside the repository", l.dest)})
-				continue
-			}
+			// Targets are matched against the files Git ships, so a wrong
+			// case, an ignored file or a path outside the repository is
+			// broken here even when it opens on this machine.
 			if !fileSet[target] && !dirs[target] {
-				r.Errors = append(r.Errors, Finding{f, l.line, fmt.Sprintf("broken link %q (%s)", l.dest, missingReason(root, target, lowerFiles))})
+				msg := fmt.Sprintf("broken link %q: %s is not in the repository", l.dest, target)
+				if actual, ok := lowerFiles[strings.ToLower(target)]; ok {
+					msg += fmt.Sprintf(" (did you mean %s?)", actual)
+				}
+				r.Errors = append(r.Errors, Finding{f, l.line, msg})
 				continue
 			}
 			targetMD := ""
@@ -239,16 +241,6 @@ func resolve(from, dest string) (target, frag string, ok bool) {
 	default:
 		return path.Clean(path.Join(path.Dir(from), p)), frag, true
 	}
-}
-
-func missingReason(root, target string, lowerFiles map[string]string) string {
-	if actual, ok := lowerFiles[strings.ToLower(target)]; ok {
-		return fmt.Sprintf("case mismatch: the repository has %s, which breaks on Linux and GitHub", actual)
-	}
-	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target))); err == nil {
-		return "the target exists but Git does not ship it (ignored or outside the listed files)"
-	}
-	return "file not found"
 }
 
 // codeReferences finds Markdown files that code reaches: //go:embed

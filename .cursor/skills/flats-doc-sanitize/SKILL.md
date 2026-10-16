@@ -79,7 +79,7 @@ Sanitize Progress:
 ### Step 1: Discover Current Doc Graph & Code Contracts
 
 1. Run `make docs-audit`. It parses every repository Markdown file with a CommonMark/GFM parser (`internal/doccheck`) and reports:
-   - **Errors** (CI runs `make docs-check`, and `TestRepositoryDocs` runs the same check under `go test`): broken relative links and `#anchor` fragments, case mismatches, links to files Git does not ship or outside the repository, and relative links inside `docs/agent/`.
+   - **Errors** (CI runs `make docs-check`): broken relative links and `#anchor` fragments, case mismatches, links to files Git does not ship or outside the repository, and relative links inside `docs/agent/`.
    - **Review lists**: docs nothing reaches from `README.md` or code (`//go:embed`, quoted `.md` paths), colocated `internal/`, `examples/` and `cmd/` notes, and lines with 40/64-character hex literals.
    Run `make help` for every documentation target.
 2. Inspect `docs/README.md`, `docs/spec/README.md`, and documentation tests to understand the active structure and automated invariants.
