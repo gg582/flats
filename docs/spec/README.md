@@ -50,5 +50,6 @@ docs:
 | Routes, MCP tools, CLI commands and console screens of every type | [surfaces.md](../surfaces.md) |
 | Operator keys, console domains, configuration schema and migrations | [configuration.md](../configuration.md) |
 | Host metrics and flat usage: request and worker accounting, attribution, storage, `/metrics` | [internal/metrics.md](../internal/metrics.md) |
+| Idle document workers: ownership, lease and lock rules, wake preparation, clean sleep, error contract, verification | [internal/docs-worker-idle.md](../internal/docs-worker-idle.md) |
 | NetBird peers and the other network providers | [networking.md](../networking.md), [network-provider-lifecycle.md](../network-provider-lifecycle.md) |
 | Client checks, CLI updates and skill sync | [release.md](../release.md#updating-a-client), [agents.md](../agents.md#keeping-clients-current) |
