@@ -206,11 +206,7 @@ func Serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	if hup != nil {
-		// A SIGHUP that arrived while the host started may follow an edit
-		// Start did not read: it stays queued and reloads now.
-		go h.reloadOnSIGHUP(ctx, hup)
-	}
+	h.startSIGHUPReloads(ctx, hup)
 	consoles := h.ConsoleURLs()
 	if len(consoles) == 0 {
 		consoles = []string{h.ConsoleURL()}

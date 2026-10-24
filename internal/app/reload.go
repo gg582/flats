@@ -253,6 +253,17 @@ func sighupActionFor(ignored, interactive bool) sighupAction {
 	}
 }
 
+// startSIGHUPReloads reloads config.json on each SIGHUP of hup, which is nil
+// when SIGHUP does not reload, until ctx ends. Serve calls it once Start has
+// returned the host. A SIGHUP that arrived while the host started stays
+// queued and reloads now: it may follow an edit that Start did not read.
+func (h *Host) startSIGHUPReloads(ctx context.Context, hup <-chan os.Signal) {
+	if hup == nil {
+		return
+	}
+	go h.reloadOnSIGHUP(ctx, hup)
+}
+
 // reloadOnSIGHUP reloads config.json on each SIGHUP until ctx ends. hup is
 // buffered, so signals that arrive while a reload runs coalesce into one
 // further reload. A refusal is logged by ReloadConfig. The reload does not

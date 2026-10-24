@@ -374,8 +374,8 @@ func TestReloadSignalsCoalesce(t *testing.T) {
 	}
 }
 
-// A SIGHUP queued before the reload loop runs, as one that arrives while the
-// host starts, reloads once the loop runs.
+// A SIGHUP that arrived while the host started is still queued when Serve
+// starts the reloads, and reloads then.
 func TestReloadQueuedSIGHUP(t *testing.T) {
 	h, _ := consoleHost(t)
 	editHostConfig(t, h, func(d *config.Document) error {
@@ -384,15 +384,10 @@ func TestReloadQueuedSIGHUP(t *testing.T) {
 	hup := make(chan os.Signal, 1)
 	hup <- syscall.SIGHUP
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		h.reloadOnSIGHUP(ctx, hup)
-		close(done)
-	}()
+	defer cancel()
+	h.startSIGHUPReloads(ctx, hup)
 	waitFor(t, func() bool {
 		all, err := h.Svc.Settings(context.Background())
 		return err == nil && all[core.SetRateLimit] == "9"
 	})
-	cancel()
-	<-done
 }
