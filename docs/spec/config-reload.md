@@ -151,7 +151,8 @@ table; a key's bucket follows the table's Applies column.
     down waits for a reload in flight but never cancels its adoption. It
     cancels the provider and console domain reconciliation: a provider or
     console domain change already running finishes, no further one starts,
-    and the next start applies the rest.
+    and the next start applies the rest. A console domain retirement that
+    has not begun stays recorded as retiring, so the next start retires it.
 
 11. **Observability.** Every reload attempt logs its outcome. A successful
     reload logs the applied keys, the keys awaiting restart, and the keys

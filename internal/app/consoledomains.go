@@ -440,6 +440,12 @@ func (h *Host) startConsoleDomains(ctx context.Context) error {
 		h.background(func(ctx context.Context) {
 			h.cdMu.Lock()
 			defer h.cdMu.Unlock()
+			// A closing host starts no further retirement; the node stays
+			// recorded as retiring, so the next start retires it.
+			if ctx.Err() != nil {
+				h.logf("console domain %s: retirement of its %s node left to the next start: the host is shutting down", k.name, providerLabel[k.prov])
+				return
+			}
 			if err := h.retireConsoleNode(ctx, k); err != nil {
 				h.logf("console domain %s: retire its %s node: %v; retried at the next start", k.name, providerLabel[k.prov], err)
 				return

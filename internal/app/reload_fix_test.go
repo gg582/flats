@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gosuda/flats/internal/config"
 	"github.com/gosuda/flats/internal/expose/provider"
+	"github.com/gosuda/flats/internal/store"
 )
 
 // A console provider change that runs between the reload's adoption and its
@@ -231,6 +233,97 @@ func TestCloseDuringReconciliationStopsFurtherChanges(t *testing.T) {
 	}
 	if !strings.Contains(out, "stopped by shutdown") {
 		t.Fatalf("the stop was not logged: %q", out)
+	}
+}
+
+// blockingTailnet is a fake tailnet whose first node stop blocks until
+// released, as a slow backend retirement would.
+type blockingTailnet struct {
+	*fakeTailnet
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *blockingTailnet) Stop(host string) error {
+	n.once.Do(func() { close(n.entered); <-n.release })
+	return n.fakeTailnet.Stop(host)
+}
+
+// Console domain retirements a reload queued do not start once the host is
+// shutting down: the one in progress finishes, the others stay recorded as
+// retiring for the next start.
+func TestCloseStopsQueuedConsoleRetirements(t *testing.T) {
+	h, tail, _ := tailnetHost(t)
+	ctx := context.Background()
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "one,two")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !tail.isServed("one") || !tail.isServed("two") {
+		t.Fatal("the listed console domains were not served")
+	}
+	slow := &blockingTailnet{fakeTailnet: tail, entered: make(chan struct{}), release: make(chan struct{})}
+	h.pmu.Lock()
+	h.testTailnet = slow
+	h.pmu.Unlock()
+	logs := captureLog(h)
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-slow.entered // the first retirement holds cdMu inside its backend stop
+	closed := make(chan error, 1)
+	go func() { closed <- h.Close() }()
+	waitFor(t, func() bool {
+		h.bgMu.Lock()
+		defer h.bgMu.Unlock()
+		return h.bgCtx != nil && h.bgCtx.Err() != nil
+	})
+	close(slow.release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	stopped := tail.stopped()
+	if len(stopped) != 1 {
+		t.Fatalf("backend retirements = %v, want only the one in progress at shutdown", stopped)
+	}
+	if !strings.Contains(logs(), "left to the next start") {
+		t.Fatalf("the skipped retirement was not logged: %q", logs())
+	}
+	// The skipped node is still recorded as retiring, for the next start. (The
+	// node in progress may stay recorded too: its record delete runs on the
+	// cancelled context, and the next start retries it.)
+	st, err := store.Open(filepath.Join(h.Config.Host.DataDir, "flats.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	nodes, err := st.ListConsoleNodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retiring []string
+	for _, n := range nodes {
+		if n.Retiring {
+			retiring = append(retiring, n.Name)
+		}
+	}
+	skipped := "one"
+	if stopped[0] == "one" {
+		skipped = "two"
+	}
+	if !slices.Contains(retiring, skipped) {
+		t.Fatalf("retiring records %v after stopping %v; the skipped node %s must stay recorded", retiring, stopped, skipped)
 	}
 }
 
