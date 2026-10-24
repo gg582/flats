@@ -673,6 +673,12 @@ func settingInt(v string) int64 {
 // quotas the current settings no longer allow, after an offline
 // configuration edit, back to view only, and records why (TECH 2.5).
 func (s *Service) downgradeEdit(ctx context.Context) error {
+	return s.downgradeEditWhen(ctx, "at startup")
+}
+
+// downgradeEditWhen is downgradeEdit; when names the occasion in the event,
+// such as "at startup" or "by a config reload".
+func (s *Service) downgradeEditWhen(ctx context.Context, when string) error {
 	slugs, err := s.st.FlatsWithAccess(ctx, store.AccessEdit)
 	if err != nil {
 		return err
@@ -703,11 +709,31 @@ func (s *Service) downgradeEdit(ctx context.Context) error {
 			stays = "the documents stay Public, view only"
 		}
 		ev := store.Event{Time: s.now(), Level: "warn", Kind: "visibility",
-			Message: "guest editing stopped at startup because " + reason + "; " + stays}
-		if err := s.st.SetPublicAccess(ctx, slugName, store.AccessEdit, store.AccessView, ev); err != nil {
-			return fmt.Errorf("stop guest editing of %s: %w", slugName, err)
+			Message: "guest editing stopped " + when + " because " + reason + "; " + stays}
+		if err := s.stopGuestEditing(ctx, slugName, ev); err != nil {
+			return err
 		}
 		s.logf("flat %s: %s", slugName, ev.Message)
+	}
+	return nil
+}
+
+// stopGuestEditing stores view only for a flat at anyone-can-edit and makes
+// a running board or document apply it, as Stop guest editing does, so a
+// config reload that lowers a quota also ends guest connections. At startup
+// nothing runs yet and only the stored level changes.
+func (s *Service) stopGuestEditing(ctx context.Context, slugName string, ev store.Event) error {
+	unlock := s.lock(slugName)
+	defer unlock()
+	if err := s.st.SetPublicAccess(ctx, slugName, store.AccessEdit, store.AccessView, ev); err != nil {
+		return fmt.Errorf("stop guest editing of %s: %w", slugName, err)
+	}
+	f, err := s.st.GetFlat(ctx, slugName)
+	if err != nil {
+		return fmt.Errorf("stop guest editing of %s: %w", slugName, err)
+	}
+	if note := s.applyLevelLocked(ctx, slugName, store.AccessView, f.AccessSeq); note != "" {
+		s.logf("flat %s: %s", slugName, note)
 	}
 	return nil
 }

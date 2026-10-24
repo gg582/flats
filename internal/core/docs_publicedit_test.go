@@ -713,6 +713,37 @@ func TestDocsPublicEditStartupDowngrade(t *testing.T) {
 	}
 }
 
+// The same downgrade on a running host, as a config reload that lowers a
+// quota runs it, also makes the running document apply view only with the
+// new epoch, so guest connections end, not just the stored level.
+func TestDocsPublicEditDowngradeAppliesToRunningWorker(t *testing.T) {
+	ctx := context.Background()
+	s, worker, _ := newPublicDocs(t, false)
+	setAccess(t, s, store.Public, store.AccessEdit)
+	if got := worker.lastAccess(); got.Level != store.AccessEdit {
+		t.Fatalf("the running document is not at edit: %+v", got)
+	}
+	if err := s.st.ContentTx(ctx, "plan", func(tx *store.ContentTx) error {
+		zero := 0
+		return tx.SetQuotas(ctx, &zero, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.downgradeEdit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.st.GetFlat(ctx, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.PublicAccess != store.AccessView {
+		t.Fatalf("stored level %q", f.PublicAccess)
+	}
+	if got := worker.lastAccess(); got.Level != store.AccessView || got.Epoch != f.AccessSeq {
+		t.Fatalf("the running document got %+v, want view at epoch %d", got, f.AccessSeq)
+	}
+}
+
 // A document import runs the board's retention: guest-only revisions keep
 // at most half of the revision quota, member revisions the rest.
 func TestDocsGuestOnlyRetention(t *testing.T) {

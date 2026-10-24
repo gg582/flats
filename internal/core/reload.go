@@ -212,7 +212,7 @@ func (s *Service) ReloadConfig(ctx context.Context) (*ConfigReload, error) {
 	// the boards and documents it leaves without a quota go back to view
 	// only, as at a start.
 	if slices.Contains(rep.Applied, SetRevisionQuota) || slices.Contains(rep.Applied, SetDiskQuotaBytes) {
-		if err := s.downgradeEdit(ctx); err != nil {
+		if err := s.downgradeEditWhen(ctx, "by a config reload"); err != nil {
 			s.logf("config reload: stop guest editing that the quotas no longer allow: %v", err)
 		}
 	}
