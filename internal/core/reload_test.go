@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -445,6 +446,18 @@ func TestReloadSerializesWithConsoleSave(t *testing.T) {
 		_, err := s.SetPermittedNetworks([]string{"tailscale"}, "")
 		saved <- err
 	}()
+	// Released only once the save waits for the settings lock the reload
+	// holds; a save that does not wait finishes first and is never parked.
+	waitFor(t, "the save to wait for the settings lock", func() bool {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		for _, g := range strings.Split(string(buf), "\n\n") {
+			if strings.Contains(g, "SemacquireMutex") && strings.Contains(g, "(*SettingsSource).setPermitted") {
+				return true
+			}
+		}
+		return false
+	})
 	close(release)
 	if err := <-reloaded; err != nil {
 		t.Fatal(err)
