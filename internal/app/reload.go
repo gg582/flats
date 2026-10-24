@@ -34,12 +34,41 @@ func (h *Host) ReloadConfig(ctx context.Context) error {
 		return err
 	}
 	h.logReload(rep)
-	h.reconcileProviders(ctx, rep.PermittedAfter)
+	// The file is adopted. What is left, the provider and console domain
+	// reconciliation, runs on a context Close cancels, so a closing host
+	// starts no further route stops or console nodes for it; the next start
+	// does what it did not finish.
+	ctx, done := h.reloadContext(ctx)
+	defer done()
+	h.reconcileProviders(ctx, rep)
 	h.reconcileConsoleDomains(ctx, rep)
 	if rep.PreferredProblem != "" {
 		h.logf("warning: %s", rep.PreferredProblem)
 	}
 	return nil
+}
+
+// reloadContext derives the context of a reload's reconciliation, which
+// Close cancels. done releases it.
+func (h *Host) reloadContext(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
+	if h.reloadClosed {
+		cancel()
+		return ctx, cancel
+	}
+	if h.reloadCancels == nil {
+		h.reloadCancels = map[*context.CancelFunc]struct{}{}
+	}
+	key := &cancel
+	h.reloadCancels[key] = struct{}{}
+	return ctx, func() {
+		h.reloadMu.Lock()
+		delete(h.reloadCancels, key)
+		h.reloadMu.Unlock()
+		cancel()
+	}
 }
 
 // logReload logs a successful reload's outcome by key name.
@@ -64,13 +93,19 @@ func (h *Host) logReload(rep *core.ConfigReload) {
 // removed one loses the grant and its routes come down. Unlike the console,
 // removing a provider that flats still allow is not refused: the file is the
 // operator's explicit instruction, and the flats keep their permission for
-// it. A provider a legacy service flag pins keeps its grant.
-func (h *Host) reconcileProviders(ctx context.Context, permitted []string) {
+// it. A provider a legacy service flag pins keeps its grant, and so does
+// Tailscale while it is the private backend, until the next start.
+//
+// network.permitted is read again under h.pmu rather than taken from the
+// adopted file: a console provider change that ran after the adoption saved
+// its own value and set its grant, and the reload must not undo it.
+func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 	h.pmu.Lock()
 	defer h.pmu.Unlock()
+	permitted := h.Svc.PermittedNetworks()
 	actual := h.Providers.File().Permitted
 	for id, by := range h.networkPins {
-		if slices.Contains(actual, id) != slices.Contains(permitted, string(id)) {
+		if slices.Contains(rep.PermittedBefore, string(id)) != slices.Contains(rep.PermittedAfter, string(id)) {
 			h.logf("config reload: network.permitted: %s is set by %s; the file's change to it does not apply while the service passes the flag", id, by)
 		}
 	}
@@ -89,6 +124,12 @@ func (h *Host) reconcileProviders(ctx context.Context, permitted []string) {
 			continue
 		}
 		if _, pinned := h.networkPins[id]; pinned {
+			continue
+		}
+		if id == provider.Tailscale && h.tsNet != nil && h.Private == core.PrivateNet(h.tsNet) {
+			// network.private_backend applies at the next start, which
+			// moves private routes off Tailscale and then drops its grant.
+			h.logf("config reload: network.permitted: tailscale stays on until the next start, because private routes run on it; network.private_backend changes at a start")
 			continue
 		}
 		h.providerOffReloadLocked(ctx, id)
@@ -158,11 +199,39 @@ func (h *Host) reconcileConsoleDomains(ctx context.Context, rep *core.ConfigRelo
 	}
 }
 
+// sighupAction is what `flats serve` does on SIGHUP.
+type sighupAction int
+
+const (
+	// sighupReload reloads config.json and keeps serving.
+	sighupReload sighupAction = iota
+	// sighupStop shuts the host down, as Ctrl+C does.
+	sighupStop
+	// sighupIgnore leaves an inherited ignore in place.
+	sighupIgnore
+)
+
+// sighupActionFor picks the SIGHUP action. A host whose standard input is a
+// terminal was started by hand, so SIGHUP means the terminal closed and the
+// host stops cleanly, unless the signal is already ignored (as under nohup).
+// Without a terminal (a service manager, a container without -t) SIGHUP
+// reloads config.json.
+func sighupActionFor(ignored, interactive bool) sighupAction {
+	switch {
+	case !interactive:
+		return sighupReload
+	case ignored:
+		return sighupIgnore
+	default:
+		return sighupStop
+	}
+}
+
 // reloadOnSIGHUP reloads config.json on each SIGHUP until ctx ends. hup is
 // buffered, so signals that arrive while a reload runs coalesce into one
-// further reload. A refusal is logged by ReloadConfig. The reload runs on a
-// background context: it must finish atomically, since cancelling it
-// mid-flight would break the all-or-nothing adoption; Close waits for it.
+// further reload. A refusal is logged by ReloadConfig. The reload does not
+// take ctx: the shutdown signal must not cancel an adoption mid-flight. Close
+// cancels the reconciliation and waits for the reload to return.
 func (h *Host) reloadOnSIGHUP(ctx context.Context, hup <-chan os.Signal) {
 	for {
 		select {

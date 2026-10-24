@@ -591,12 +591,14 @@ approvals.
   differing file values as held by the flag without applying it.
 - **`flats config set KEY VALUE` / `unset KEY`**: offline; they take the host
   lock and refuse while a host runs.
-- **A text editor**: allowed. Sending SIGHUP to `flats serve` reloads the
-  file: the keys whose Applies cell names a live path take effect at once with
-  the same side effects as a console save, the others apply at the next start,
-  and an invalid file is refused and logged, changing nothing. Without a
-  SIGHUP the change applies at the next start, which fails if the file is
-  invalid.
+- **A text editor**: allowed. Sending SIGHUP to a `flats serve` that runs as
+  a service or in a container without a TTY reloads the file: the keys whose
+  Applies cell names a live path take effect at once with the same side
+  effects as a console save, the others apply at the next start, and an
+  invalid file is refused and logged, changing nothing. A `flats serve`
+  started in a terminal stops on SIGHUP instead, as when the terminal
+  closes. Without a reload the change applies at the next start, which fails
+  if the file is invalid.
 
 Every Flats write keeps the previous file in `config-history/`, writes a
 synced temporary file, renames it into place and syncs the directory.

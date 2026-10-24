@@ -18,12 +18,18 @@ table; a key's bucket follows the table's Applies column.
 
 ## Requirements
 
-1. **Trigger.** SIGHUP to the `flats serve` process requests one reload.
-   SIGHUP never terminates or interrupts the host. There is no file watcher.
-   Reloads happen only on the signal. Reloads are serialized by the settings
-   lock (requirement 10); SIGHUPs that arrive while one runs coalesce into at
-   most one further reload. A SIGHUP that arrives before the settings source
-   exists is ignored.
+1. **Trigger.** SIGHUP to a `flats serve` process whose standard input is
+   not a terminal, as under a service manager or in a container without a
+   TTY, requests one reload. It never terminates or interrupts that host.
+   There is no file watcher. Reloads happen only on the signal. Reloads are
+   serialized by the settings lock (requirement 10); SIGHUPs that arrive
+   while one runs coalesce into at most one further reload. A SIGHUP that
+   arrives before the settings source exists is ignored.
+
+   A host whose standard input is a terminal was started by hand, and there
+   SIGHUP means the terminal closed: the host shuts down cleanly, as on
+   Ctrl+C. If SIGHUP was already ignored when it started (as under `nohup`),
+   it stays ignored. Neither case reloads.
 
 2. **Validation before adoption.** A reload parses and validates the whole
    file with the same rules a start applies: strict parsing, per-key checks,
@@ -92,6 +98,16 @@ table; a key's bucket follows the table's Applies column.
    restart. A grant or backend failure is logged and leaves that provider's
    state as it was; the rest of the reload stands.
 
+   A removal that only a start can apply safely waits for it. While private
+   routes run on Tailscale, a reload does not remove Tailscale's grant: the
+   `network.private_backend` change that moves them off it applies only at
+   the next start. The reload logs that Tailscale stays on until then.
+
+   The reconciliation applies `network.permitted` as it is when it runs,
+   under the lock the console's provider changes hold. A console provider
+   change that lands after the file was adopted is therefore kept, not
+   undone by the reload.
+
 7. **Console domains.** A reload reconciles both console domain lists,
    `tailscale.console_hosts` and `netbird.console_hosts`, the way the next
    start would. A listed name that is not served starts being served, as
@@ -130,6 +146,9 @@ table; a key's bucket follows the table's Applies column.
 
 10. **Atomicity.** A reload holds the same settings lock as a console save,
     so the two cannot interleave, and each observes the other's result.
+    Both run the same side effects for a changed setting. Shutting the host
+    down cancels the provider and console domain reconciliation of a reload
+    in flight, never its adoption; the next start finishes what it left.
 
 11. **Observability.** Every reload attempt logs its outcome. A successful
     reload logs the applied keys, the keys awaiting restart, and the keys

@@ -39,6 +39,7 @@ import (
 	"github.com/gosuda/flats/internal/metrics"
 	"github.com/gosuda/flats/internal/runtime"
 	"github.com/gosuda/flats/internal/store"
+	"golang.org/x/term"
 )
 
 // Options configure `flats serve`.
@@ -187,24 +188,33 @@ func Serve(args []string) error {
 			return actionf("FLATS_CONFIG must be an absolute path, not %q", o.ConfigPath)
 		}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	shutdown := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	var hup chan os.Signal
+	switch sighupActionFor(signal.Ignored(syscall.SIGHUP), term.IsTerminal(int(os.Stdin.Fd()))) {
+	case sighupStop:
+		shutdown = append(shutdown, syscall.SIGHUP)
+	case sighupReload:
+		// Intercepted before Start, so a SIGHUP never terminates a service;
+		// buffered, the signals coalesce.
+		hup = make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), shutdown...)
 	defer stop()
-	// SIGHUP requests a config reload and must never terminate the host, so
-	// it is intercepted before Start; buffered, the signals coalesce.
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
-	defer signal.Stop(hup)
 	h, err := Start(ctx, o)
 	if err != nil {
 		return err
 	}
-	// A SIGHUP that arrived before the settings source exists requests no
-	// reload.
-	select {
-	case <-hup:
-	default:
+	if hup != nil {
+		// A SIGHUP that arrived before the settings source exists requests
+		// no reload.
+		select {
+		case <-hup:
+		default:
+		}
+		go h.reloadOnSIGHUP(ctx, hup)
 	}
-	go h.reloadOnSIGHUP(ctx, hup)
 	consoles := h.ConsoleURLs()
 	if len(consoles) == 0 {
 		consoles = []string{h.ConsoleURL()}
@@ -288,12 +298,14 @@ type Host struct {
 	// reloadMu gates ReloadConfig against Close: once reloadClosed is set no
 	// reload starts, and reloadWG lets Close wait out an in-flight reload
 	// before the settings, providers and store it uses are torn down.
-	reloadMu     sync.Mutex
-	reloadWG     sync.WaitGroup
-	reloadClosed bool
-	dataLock     *os.File
-	closeOnce    sync.Once
-	closeErr     error
+	// reloadCancels cancel the reconciliation of in-flight reloads.
+	reloadMu      sync.Mutex
+	reloadWG      sync.WaitGroup
+	reloadClosed  bool
+	reloadCancels map[*context.CancelFunc]struct{}
+	dataLock      *os.File
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 // background runs fn until it returns; Close cancels its context and
@@ -814,6 +826,9 @@ func (h *Host) Close() error {
 		// stops it from registering background work.
 		h.reloadMu.Lock()
 		h.reloadClosed = true
+		for cancel := range h.reloadCancels {
+			(*cancel)()
+		}
 		h.reloadMu.Unlock()
 		if h.testReloadGate != nil {
 			h.testReloadGate()

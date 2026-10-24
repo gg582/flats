@@ -207,27 +207,10 @@ func (s *Service) ReloadConfig(ctx context.Context) (*ConfigReload, error) {
 	if err != nil {
 		return nil, err
 	}
-	if slices.Contains(rep.Applied, SetRateLimit) {
-		s.mu.Lock()
-		for _, lf := range s.live {
-			lf.limiter.setRate(s.rateLimit())
-		}
-		s.mu.Unlock()
-	}
-	if slices.Contains(rep.Applied, SetPortalHide) {
-		s.applyHostListing(ctx)
-	}
-	quotaChanged := false
-	if slices.Contains(rep.Applied, SetRevisionQuota) {
-		s.retainAllRevisions(ctx, true)
-		quotaChanged = true
-	}
-	if slices.Contains(rep.Applied, SetDiskQuotaBytes) {
-		s.pushAllDocsBudgets(ctx)
-		s.remeasureBoards()
-		quotaChanged = true
-	}
-	if quotaChanged {
+	s.applySettingChanges(ctx, rep.Applied)
+	// Unlike a console save, which refuses such a quota, a reload stands, so
+	// the boards it leaves without a quota go back to view only, as at a start.
+	if slices.Contains(rep.Applied, SetRevisionQuota) || slices.Contains(rep.Applied, SetDiskQuotaBytes) {
 		if err := s.downgradeEditBoards(ctx); err != nil {
 			s.logf("config reload: downgrade boards anyone can edit: %v", err)
 		}

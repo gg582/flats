@@ -772,7 +772,15 @@ func (s *Service) UpdateSettingsMatch(ctx context.Context, in map[string]string,
 		}
 		return SettingsUpdate{}, err
 	}
-	if _, ok := clean[SetRateLimit]; ok {
+	s.applySettingChanges(ctx, changed)
+	all, _ := s.Settings(ctx)
+	return SettingsUpdate{Settings: all, Changed: changed, ETag: etag}, nil
+}
+
+// applySettingChanges runs the side effects of stored settings whose value
+// changed, after a console save or a config.json reload stored them.
+func (s *Service) applySettingChanges(ctx context.Context, changed []string) {
+	if slices.Contains(changed, SetRateLimit) {
 		s.mu.Lock()
 		for _, lf := range s.live {
 			lf.limiter.setRate(s.rateLimit())
@@ -789,8 +797,6 @@ func (s *Service) UpdateSettingsMatch(ctx context.Context, in map[string]string,
 		s.pushAllDocsBudgets(ctx)
 		s.remeasureBoards()
 	}
-	all, _ := s.Settings(ctx)
-	return SettingsUpdate{Settings: all, Changed: changed, ETag: etag}, nil
 }
 
 // updateSettingsChecked saves clean unless it would leave a board anyone
