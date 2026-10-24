@@ -588,8 +588,8 @@ approvals.
   passes `--relays` pins the relays, one that passes `--portal`, `--permit` or
   `--network tailscale` pins those providers, and one that passes
   `--console-host` pins the console domains: the console refuses to change
-  them until the service is reinstalled, and a reload logs each of their
-  differing file values as held by the flag without applying it.
+  them until the service is reinstalled, and a SIGHUP reload refuses a file
+  that changes them.
 - **`flats config set KEY VALUE` / `unset KEY`**: offline; they take the host
   lock and refuse while a host runs.
 - **A text editor**: allowed. Sending SIGHUP to a `flats serve` that runs as

@@ -92,8 +92,8 @@ func (h *Host) logReload(rep *core.ConfigReload) {
 // backend, and a removed one that no flat allows loses its grant. A removed
 // provider that flats still allow keeps its grant and routes until the next
 // start, as the console refuses to turn it off, and so does Tailscale while
-// it is the private backend. A provider a legacy service flag pins keeps its
-// grant.
+// it is the private backend. A reload never changes a provider a legacy
+// service flag pins: it refuses such a file before adopting it.
 //
 // network.permitted is read again under h.pmu rather than taken from the
 // adopted file: a console provider change that ran after the adoption saved
@@ -103,17 +103,9 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 	defer h.pmu.Unlock()
 	permitted := h.Svc.PermittedNetworks()
 	actual := h.Providers.File().Permitted
-	for id, by := range h.networkPins {
-		if slices.Contains(rep.PermittedBefore, string(id)) != slices.Contains(rep.PermittedAfter, string(id)) {
-			h.logf("config reload: network.permitted: %s is set by %s; the file's change to it does not apply while the service passes the flag", id, by)
-		}
-	}
 	for _, raw := range permitted {
 		id := provider.ID(raw)
 		if h.Providers.HostAllows(id) {
-			continue
-		}
-		if _, pinned := h.networkPins[id]; pinned {
 			continue
 		}
 		if h.reconcileStopped(ctx) {
@@ -124,9 +116,6 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 	var allowing map[provider.ID][]string
 	for _, id := range actual {
 		if slices.Contains(permitted, string(id)) {
-			continue
-		}
-		if _, pinned := h.networkPins[id]; pinned {
 			continue
 		}
 		if id == provider.Tailscale && h.tsNet != nil && h.Private == core.PrivateNet(h.tsNet) {

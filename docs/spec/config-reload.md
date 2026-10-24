@@ -38,7 +38,8 @@ table; a key's bucket follows the table's Applies column.
    external-origins versus proxy-template overlap, default providers within
    the permitted set, at most one of `proxy` and `proxy-public`), and the
    host binding (`host.instance_id` and `host.data_dir` must match the
-   running host; they never change on a live host). The host refuses an
+   running host; they never change on a live host) and the values a legacy
+   service flag pins (requirement 9). The host refuses an
    unreadable, missing or invalid file, and one whose `schema_version`
    differs from the running host's schema in either direction, because a
    reload cannot migrate a running host. A refusal keeps the current
@@ -138,16 +139,23 @@ table; a key's bucket follows the table's Applies column.
    running host keeps its current values and logs each changed key that
    awaits a restart.
 
-9. **Run overrides and pins.** Values pinned for this run by service flags
-   survive a reload: the config-mode run overrides `--listen`
+9. **Run overrides and pins.** Values set for this run by service flags
+   survive a reload. The config-mode run overrides `--listen`
    (`host.console_addr`), `--local-addr` (`host.local_addr`),
    `--console-host` (`tailscale.console_hosts`) and `--runtime`
-   (`host.server_runtime`); the legacy `--relays` flag pins
-   `portal.relays`; and the legacy `--portal`, `--network` and `--permit`
-   flags pin their provider grants in `network.permitted`. The running value
-   stays, a differing file value enters the adopted document without
-   changing this run, and the reload log names each such key and what pins
-   it.
+   (`host.server_runtime`) are never stored: the running value stays, a
+   differing file value enters the adopted document without changing this
+   run, and the reload log names each such key and its flag.
+
+   A legacy service's flags pin values instead: `--relays` pins
+   `portal.relays`, `--console-host` pins `tailscale.console_hosts`, and
+   `--portal`, `--network tailscale` and `--permit` pin their providers'
+   membership of `network.permitted`. Such a service compares its flags
+   with the file at every start and refuses to run while they differ, and
+   the console refuses to change a pinned value. A reload likewise refuses,
+   all or nothing as in requirement 2, a file whose value for a pinned
+   setting differs from the running value; the refusal names the key and
+   the flag that pins it, as the console's refusal does.
 
 10. **Atomicity.** A reload holds the same settings lock as a console save,
     so the two cannot interleave, and each observes the other's result.

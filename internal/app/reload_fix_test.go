@@ -32,8 +32,8 @@ func TestReloadKeepsConsoleProviderChangeAfterAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(rep.PermittedAfter, "portal") {
-		t.Fatalf("the adopted file already permits portal: %v", rep.PermittedAfter)
+	if got := h.Svc.PermittedNetworks(); slices.Contains(got, "portal") {
+		t.Fatalf("the adopted file already permits portal: %v", got)
 	}
 	// The console turns portal on before the reconciliation takes h.pmu.
 	if code, out := setHost(t, h, client, "portal", true); code != 200 {
@@ -166,36 +166,25 @@ func TestReloadKeepsTailscaleWhilePrivateBackend(t *testing.T) {
 	}
 }
 
-// The pin message names a pinned provider only on the reload whose file
-// changed it, not on every later reload while the file still differs.
-func TestReloadPinLoggedOnlyOnChange(t *testing.T) {
+// A reload of a file that leaves a pinned provider alone is adopted and
+// keeps the provider's grant, without naming the pin.
+func TestReloadKeepsPinnedProvider(t *testing.T) {
 	h, _ := consoleHostWith(t, t.TempDir(), func(o *Options) {
 		o.Portal = true
 		o.Set = map[string]bool{"portal": true}
 	})
-	ctx := context.Background()
 	logs := captureLog(h)
-	editHostConfig(t, h, func(d *config.Document) error {
-		return d.Set("network.permitted", "")
-	})
-	if err := h.ReloadConfig(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(logs(), "--portal") {
-		t.Fatalf("the reload that removed the pinned provider did not log the pin: %q", logs())
-	}
-	logs = captureLog(h)
 	editHostConfig(t, h, func(d *config.Document) error {
 		return d.Set("system.rate_limit_rps", "9")
 	})
-	if err := h.ReloadConfig(ctx); err != nil {
+	if err := h.ReloadConfig(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !h.Providers.HostAllows(provider.Portal) {
 		t.Fatal("the pinned provider lost its grant")
 	}
 	if strings.Contains(logs(), "--portal") {
-		t.Fatalf("a reload that left network.permitted alone logged the pin again: %q", logs())
+		t.Fatalf("a reload that left network.permitted alone named the pin: %q", logs())
 	}
 }
 

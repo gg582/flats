@@ -576,6 +576,9 @@ func Start(ctx context.Context, o Options) (*Host, error) {
 	// provider a legacy service's flags grant, or change one its --portal sets.
 	if s.legacy {
 		h.networkPins = legacyNetworkPins(o)
+		for id, by := range h.networkPins {
+			settings.PinProvider(string(id), by)
+		}
 	}
 	if s.legacy && o.Set["console-host"] {
 		settings.PinConsoleHosts("the service's --console-host flag")

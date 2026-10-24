@@ -35,8 +35,8 @@ var overrideBy = map[string]string{
 	consoleHostsKey:       "the service's --console-host flag",
 }
 
-// ReloadHeld is a key whose adopted file value a run override or pin keeps
-// from taking effect in this run.
+// ReloadHeld is a key whose adopted file value a run override keeps from
+// taking effect in this run.
 type ReloadHeld struct {
 	Key string `json:"key"`
 	By  string `json:"by"`
@@ -52,16 +52,13 @@ type ConfigReload struct {
 	// AwaitRestart lists the changed config.json keys only the next start
 	// applies.
 	AwaitRestart []string
-	// Held lists the keys whose differing file value a run override or pin
-	// keeps from this run.
+	// Held lists the keys whose differing file value a run override keeps
+	// from this run.
 	Held []ReloadHeld
 	// ETag is the settings ETag after the reload: the file's hash.
 	ETag string
-	// PermittedBefore and PermittedAfter are network.permitted before and
-	// after the reload.
-	PermittedBefore, PermittedAfter []string
 	// The console domain lists in effect for this run, before and after. A
-	// list a run override or pin holds is unchanged by the reload.
+	// list a run override holds is unchanged by the reload.
 	TailscaleHostsBefore, TailscaleHostsAfter []string
 	NetbirdHostsBefore, NetbirdHostsAfter     []string
 	// PreferredProblem is why an adopted console.preferred_host is not in
@@ -109,9 +106,11 @@ func (s *SettingsSource) reload() (*ConfigReload, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkPins(oldRun, newRun); err != nil {
+		return nil, err
+	}
 
 	rep := &ConfigReload{ETag: l.Hash,
-		PermittedBefore: slices.Clone(oldPlain.Network.Permitted), PermittedAfter: slices.Clone(newPlain.Network.Permitted),
 		TailscaleHostsBefore: slices.Clone(oldRun.Tailscale.ConsoleHosts), TailscaleHostsAfter: slices.Clone(newRun.Tailscale.ConsoleHosts),
 		NetbirdHostsBefore: slices.Clone(oldRun.Netbird.ConsoleHosts), NetbirdHostsAfter: slices.Clone(newRun.Netbird.ConsoleHosts),
 	}
@@ -123,20 +122,13 @@ func (s *SettingsSource) reload() (*ConfigReload, error) {
 		rep.PreferredProblem = newRun.PreferredHostProblem()
 	}
 
-	// Run overrides and pins keep this run's value; a changed file value
-	// enters the adopted document without changing this run.
+	// Run overrides keep this run's value; a changed file value enters the
+	// adopted document without changing this run.
 	heldBy := map[string]string{}
 	for key := range s.file.Overrides {
 		by, ok := overrideBy[key]
 		if !ok {
 			by = "a per-run override"
-		}
-		heldBy[key] = by
-	}
-	for setting, by := range s.pinned {
-		key := setting
-		if ck, ok := settingKeys[setting]; ok {
-			key = ck
 		}
 		heldBy[key] = by
 	}
@@ -182,6 +174,30 @@ func (s *SettingsSource) reload() (*ConfigReload, error) {
 		}
 	}
 	return rep, nil
+}
+
+// checkPins refuses a file that changes what a legacy service flag pins:
+// the next start compares the flag with the file and refuses to run while
+// they differ, and the running value is the flag's. s.mu is held.
+func (s *SettingsSource) checkPins(oldRun, newRun *config.Config) error {
+	for _, setting := range slices.Sorted(maps.Keys(s.pinned)) {
+		key := setting
+		if ck, ok := settingKeys[setting]; ok {
+			key = ck
+		}
+		if _, ok := s.file.Overrides[key]; ok {
+			continue
+		}
+		if lookupString(newRun, key) != lookupString(oldRun, key) {
+			return withKind(ErrConfigOverridden, fmt.Errorf("%s is set by %s, and config.json changes it; reinstall the service with `flats install` to manage it in config.json", key, s.pinned[setting]))
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(s.pinnedProviders)) {
+		if slices.Contains(oldRun.Network.Permitted, id) != slices.Contains(newRun.Network.Permitted, id) {
+			return withKind(ErrConfigOverridden, fmt.Errorf("network.permitted: %s is set by %s, and config.json changes it; reinstall the service with `flats install` to manage it in config.json", id, s.pinnedProviders[id]))
+		}
+	}
+	return nil
 }
 
 // lookupString formats key's effective value for comparison.

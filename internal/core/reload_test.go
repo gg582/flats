@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/gosuda/flats/internal/config"
 	"github.com/gosuda/flats/internal/store"
@@ -220,27 +219,66 @@ func TestReloadPushesRateLimit(t *testing.T) {
 	}
 }
 
-// A value pinned for this run survives a reload: the running value stays, the
-// file's value enters the adopted document, and the report names the key and
-// what pins it.
-func TestReloadKeepsPinnedSetting(t *testing.T) {
-	s, path := newReloadService(t)
-	ctx := context.Background()
-	s.settings.Pin(SetPortalRelays, "the service's --relays flag")
-	editConfig(t, path, func(d *config.Document) error { return d.Set("portal.relays", "https://relay.example.com") })
-	rep, err := s.ReloadConfig(ctx)
-	if err != nil {
-		t.Fatal(err)
+// A reload refuses a file that changes a value a legacy service flag pins,
+// whose next start would refuse to run with it, and changes nothing; one that
+// leaves the pinned value alone is adopted.
+func TestReloadRefusesPinnedSettingChange(t *testing.T) {
+	for _, c := range []struct {
+		name, key, value, base, by string
+		pin                        func(*SettingsSource)
+	}{
+		{"relays", "portal.relays", "https://relay.example.com", "", "the service's --relays flag",
+			func(s *SettingsSource) { s.Pin(SetPortalRelays, "the service's --relays flag") }},
+		{"console domains", consoleHostsKey, "ops", "", "the service's --console-host flag",
+			func(s *SettingsSource) { s.PinConsoleHosts("the service's --console-host flag") }},
+		{"provider", "network.permitted", "tailscale,portal", "tailscale", "the service's --portal flag",
+			func(s *SettingsSource) { s.PinProvider("portal", "the service's --portal flag") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, path := newReloadService(t)
+			ctx := context.Background()
+			// Console domains need Tailscale permitted; it is not pinned.
+			editConfig(t, path, func(d *config.Document) error { return d.Set("network.permitted", "tailscale") })
+			if _, err := s.ReloadConfig(ctx); err != nil {
+				t.Fatal(err)
+			}
+			c.pin(s.settings)
+			etag, hosts, permitted := s.SettingsETag(), hostsOf(s), s.PermittedNetworks()
+			editConfig(t, path, func(d *config.Document) error {
+				if err := d.Set("system.rate_limit_rps", "3"); err != nil {
+					return err
+				}
+				return d.Set(c.key, c.value)
+			})
+			_, err := s.ReloadConfig(ctx)
+			if !errors.Is(err, ErrConfigOverridden) || !strings.Contains(err.Error(), c.by) || !strings.Contains(err.Error(), c.key) {
+				t.Fatalf("reload of a changed pinned value: %v", err)
+			}
+			if s.SettingsETag() != etag || s.rateLimit() == 3 || !slices.Equal(hostsOf(s), hosts) || !slices.Equal(s.PermittedNetworks(), permitted) {
+				t.Fatal("a refused reload changed the settings")
+			}
+			// The same file without the pinned change is adopted.
+			editConfig(t, path, func(d *config.Document) error {
+				if c.base == "" {
+					return d.Unset(c.key)
+				}
+				return d.Set(c.key, c.base)
+			})
+			rep, err := s.ReloadConfig(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(rep.Applied, []string{SetRateLimit}) || len(rep.Held) != 0 {
+				t.Fatalf("applied %v held %v", rep.Applied, rep.Held)
+			}
+		})
 	}
-	if !slices.Equal(rep.Held, []ReloadHeld{{Key: "portal.relays", By: "the service's --relays flag"}}) {
-		t.Fatalf("held %v", rep.Held)
-	}
-	if slices.Contains(rep.AwaitRestart, "portal.relays") || slices.Contains(rep.Applied, SetPortalRelays) {
-		t.Fatalf("a held key was bucketed: %v %v", rep.Applied, rep.AwaitRestart)
-	}
-	if _, err := s.UpdateSettings(ctx, map[string]string{SetPortalRelays: ""}); !errors.Is(err, ErrConfigOverridden) {
-		t.Fatalf("the pin was lost: %v", err)
-	}
+}
+
+// hostsOf returns the Tailscale console domains in effect.
+func hostsOf(s *Service) []string {
+	l, _ := s.ConsoleHostsOf(ConsoleProviderTailscale)
+	return l
 }
 
 // A per-run override keeps its value across a reload that changes the file's.
@@ -260,8 +298,8 @@ func TestReloadKeepsRunOverride(t *testing.T) {
 	}
 }
 
-// network.permitted and the console domain lists are reported before and
-// after so the host can reconcile them live.
+// The console domain lists are reported before and after, and the adopted
+// network.permitted is in effect, so the host can reconcile them live.
 func TestReloadReportsProvidersAndConsoleHosts(t *testing.T) {
 	s, path := newReloadService(t)
 	// netbird console hosts without a netbird grant are invalid; a raw edit
@@ -295,8 +333,8 @@ func TestReloadReportsProvidersAndConsoleHosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.PermittedBefore) != 0 || !slices.Equal(rep.PermittedAfter, []string{"tailscale", "netbird"}) {
-		t.Fatalf("permitted %v -> %v", rep.PermittedBefore, rep.PermittedAfter)
+	if got := s.PermittedNetworks(); !slices.Equal(got, []string{"tailscale", "netbird"}) {
+		t.Fatalf("permitted %v", got)
 	}
 	if len(rep.TailscaleHostsBefore) != 0 || !slices.Equal(rep.TailscaleHostsAfter, []string{"flats"}) {
 		t.Fatalf("tailscale hosts %v -> %v", rep.TailscaleHostsBefore, rep.TailscaleHostsAfter)
@@ -368,8 +406,9 @@ func TestReloadSideEffectFailureKeepsAdoptedFile(t *testing.T) {
 
 // A reload holds the settings lock like a console save: a save that reaches
 // the file write always observes the reload's adopted values. If the reload
-// did not hold the lock while it loaded, the save would commit first and see
-// the pre-reload values.
+// did not hold the lock while it loaded, the save would run first against
+// the pre-reload settings, and see their values or find the file changed on
+// disk.
 func TestReloadSerializesWithConsoleSave(t *testing.T) {
 	s, path := newReloadService(t)
 	ctx := context.Background()
@@ -399,9 +438,11 @@ func TestReloadSerializesWithConsoleSave(t *testing.T) {
 		reloaded <- err
 	}()
 	<-loadEntered // the reload holds the settings lock
+	// A console provider change takes only the settings lock, unlike a
+	// settings save, which also waits for the reload's guest-editing lock.
 	saved := make(chan error, 1)
 	go func() {
-		_, err := s.UpdateSettings(ctx, map[string]string{SetPreviewTTL: "3600"})
+		_, err := s.SetPermittedNetworks([]string{"tailscale"}, "")
 		saved <- err
 	}()
 	close(release)
@@ -414,7 +455,7 @@ func TestReloadSerializesWithConsoleSave(t *testing.T) {
 	if staleSave {
 		t.Fatal("a save committed with pre-reload values: the reload did not hold the settings lock")
 	}
-	if s.UploadLimit() != 4096 || s.previewTTL() != time.Hour {
+	if s.UploadLimit() != 4096 || !slices.Equal(s.PermittedNetworks(), []string{"tailscale"}) {
 		t.Fatal("reload or save result missing")
 	}
 }

@@ -104,29 +104,30 @@ func TestReloadAppliesFileEdits(t *testing.T) {
 	}
 }
 
-// A reload does not change a provider a legacy service flag pins: the grant
-// stays, the adopted file keeps the operator's edit, and the log names the
-// key and the flag.
+// A reload refuses a file that changes a provider a legacy service flag
+// pins, whose next start would refuse to run with it: the grant and the
+// settings stay, and the log names the key and the flag.
 func TestReloadProviderPinnedByLegacyFlag(t *testing.T) {
 	h, _ := consoleHostWith(t, t.TempDir(), func(o *Options) {
 		o.Portal = true
 		o.Set = map[string]bool{"portal": true}
 	})
 	logs := captureLog(h)
+	etag := h.Svc.SettingsETag()
 	editHostConfig(t, h, func(d *config.Document) error {
 		return d.Set("network.permitted", "")
 	})
-	if err := h.ReloadConfig(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := h.ReloadConfig(context.Background()); !errors.Is(err, core.ErrConfigOverridden) {
+		t.Fatalf("reload of a file that changes a pinned provider: %v", err)
 	}
 	if !h.Providers.HostAllows(provider.Portal) {
 		t.Fatal("a pinned provider lost its grant")
 	}
-	if got := configPermitted(t, h); len(got) != 0 {
-		t.Fatalf("the file was not adopted: %v", got)
+	if got := h.Svc.PermittedNetworks(); !slices.Contains(got, "portal") || h.Svc.SettingsETag() != etag {
+		t.Fatalf("a refused reload changed the settings: %v", got)
 	}
-	if !strings.Contains(logs(), "--portal") {
-		t.Fatalf("the pin was not logged: %q", logs())
+	if out := logs(); !strings.Contains(out, "reload refused") || !strings.Contains(out, "--portal") {
+		t.Fatalf("the refusal was not logged with the flag: %q", out)
 	}
 }
 

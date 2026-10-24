@@ -113,7 +113,10 @@ type SettingsSource struct {
 	// readers never wait for a save that holds mu.
 	proxy  atomic.Pointer[config.ProxyConfig]
 	pinned map[string]string // setting -> who sets it
-	file   *SettingsFile
+	// pinnedProviders are the providers whose network.permitted membership
+	// a service flag sets: provider -> who sets it.
+	pinnedProviders map[string]string
+	file            *SettingsFile
 }
 
 // SettingsFile is the config.json behind a SettingsSource.
@@ -154,6 +157,18 @@ func (s *SettingsSource) Pin(setting, by string) {
 		s.pinned = map[string]string{}
 	}
 	s.pinned[setting] = by
+}
+
+// PinProvider records that by, such as "the service's --portal flag", sets
+// whether network.permitted lists id; a reload refuses a file that changes
+// it. The host refuses console changes to it itself.
+func (s *SettingsSource) PinProvider(id, by string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pinnedProviders == nil {
+		s.pinnedProviders = map[string]string{}
+	}
+	s.pinnedProviders[id] = by
 }
 
 // NewSettingsSource serves the settings of doc, saved to file (nil keeps
