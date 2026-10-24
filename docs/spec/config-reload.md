@@ -13,7 +13,9 @@ immediately, for every key with a defined live path. Keys without one wait
 for the next start, as they do today. Where configuration.md says a key
 applies "immediately from the console; otherwise restart", the reload is the
 live path for file edits: it runs the same side effects as the console save.
-Requirements 4 to 9 below partition every key of the configuration.md key
+A change that the running host cannot apply safely at once waits for the
+next start, and a file the next start would refuse to run with is refused,
+as requirements 6 and 9 describe. Requirements 4 to 9 below partition every key of the configuration.md key
 table; a key's bucket follows the table's Applies column.
 
 ## Requirements
@@ -96,9 +98,9 @@ table; a key's bucket follows the table's Applies column.
 
    A removal that only a start can apply safely waits for it. The console
    refuses to turn off a provider that a flat still allows; a reload instead
-   keeps that provider's host grant and routes for this run and logs, by
-   provider name, that the removal applies at the next start because flats
-   still allow it. The next start opens no route for the provider; each
+   keeps that provider's host grant and routes for this run and logs,
+   naming the provider and the flats that allow it, that the removal applies
+   at the next start. The next start opens no route for the provider; each
    flat's provider permission and visibility in `flats.db` stay, and nothing
    is published or unpublished. A later reload removes the grant once no
    flat allows the provider, and one that lists the provider again leaves
@@ -116,19 +118,20 @@ table; a key's bucket follows the table's Applies column.
    `tailscale.console_hosts` and `netbird.console_hosts`, the way the next
    start would, whether or not the file changed them. A listed name that is
    not served starts being served, as when the console adds it; a name
-   already served is left as it is. A served name that is no longer listed is
-   retired the way a start retires it: the Tailscale node logs out, the
+   already served is left as it is. A served name that is no longer listed
+   is retired the way a start retires it: the Tailscale node logs out, the
    NetBird peer stops, and the identity is deleted. A failed retirement
    keeps the name reserved, is logged, and retries at the next reload or
    start. A conflict or a failed retirement leaves that name's state as it
-   was; the rest of the reload stands, and the next reload retries the name,
-   serving it once its conflict has gone. A conflicting name enters the adopted
-   list but is not served, and the conflict is logged. The conflict and
-   reservation rules of the console flows apply unchanged: a name taken by a
-   flat, preview, redirect or a still-retiring node is not served. The check
-   and the start of the name's node hold the name's reservation, as a console
-   addition does, so a flat being created under that name meanwhile either
-   finishes first, and the name is not served, or is refused.
+   was; the rest of the reload stands, and the next reload retries the
+   name, serving it once its conflict has gone. A conflicting name enters
+   the adopted list but is not served, and the conflict is logged. The
+   conflict and reservation rules of the console flows apply unchanged: a
+   name taken by a flat, preview, redirect or a still-retiring node is not
+   served. The check and the start of the name's node hold the name's
+   reservation, as a console addition does, so a flat being created under
+   that name meanwhile either finishes first, and the name is not served,
+   or is refused.
 
 8. **Restart-required keys.** These keys enter the adopted document and
    apply at the next start, exactly as they do today: `host.console_addr`,
