@@ -170,6 +170,47 @@ func TestReloadProxyKindSwitchWhileFlatsAllow(t *testing.T) {
 	}
 }
 
+// A reload that removes a reverse proxy kind whose route is still
+// registered, as when a flat allows it after the reload listed the flats,
+// keeps the kind on with its route, and does not turn the other kind on
+// beside it.
+func TestReloadProxyKindKeptWhileRouteRegistered(t *testing.T) {
+	h, _ := startConfigHost(t, proxyConfig(t, "proxy.addr", "127.0.0.1:0", "proxy.url_template", testProxyTemplate, "network.permitted", "proxy"))
+	ctx := context.Background()
+	deploySite(t, h.Svc, "site", "<p>site</p>")
+	addr := h.proxyBackend().(*proxy.Net).Addr()
+	logs := captureLog(h)
+	// No flat allows proxy when the reload lists the flats; the flat allows
+	// it just before the grant comes off.
+	var once sync.Once
+	h.testGrantFailure = func(id provider.ID, permitted bool) error {
+		if id == provider.Proxy && !permitted {
+			once.Do(func() {
+				if err := h.Svc.SetProviderPermission(ctx, "site", "proxy", true, core.ViaConsole); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		return nil
+	}
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("network.permitted", "proxy-public")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.testGrantFailure = nil
+	if !h.Providers.HostAllows(provider.Proxy) || h.Providers.HostAllows(provider.ProxyPublic) {
+		t.Fatalf("grants: proxy %v, proxy-public %v", h.Providers.HostAllows(provider.Proxy), h.Providers.HostAllows(provider.ProxyPublic))
+	}
+	if !strings.Contains(logs(), "proxy stays on until a later reload or the next start, because a reverse proxy route is still registered") {
+		t.Fatalf("the kept kind was not logged: %q", logs())
+	}
+	if code := proxyStatus(t, addr, "site.site.example.org"); code != 200 {
+		t.Fatalf("the route after the reload: %d", code)
+	}
+}
+
 // A reload that drops tailscale from network.permitted while private routes
 // run on Tailscale keeps its grant until the next start, which applies
 // network.private_backend first.

@@ -110,10 +110,12 @@ table; a key's bucket follows the table's Applies column.
    because flats allow it, the other kind is not turned on, which the
    reload logs. It is turned on once the first kind is off, by a later
    reload or at the next start; the console refuses to turn it on until
-   then. Likewise, while private routes run on Tailscale, a reload does not
-   remove Tailscale's grant: the `network.private_backend` change that
-   moves them off it applies only at the next start. The reload logs that
-   Tailscale stays on until then.
+   then. A removed kind whose route is still registered, such as one a flat
+   allowed while the reload ran, also stays on with its listener, as the
+   console's turn-off refuses then. Likewise, while private routes run on
+   Tailscale, a reload does not remove Tailscale's grant: the
+   `network.private_backend` change that moves them off it applies only at
+   the next start. The reload logs that Tailscale stays on until then.
 
    The reconciliation applies `network.permitted` as it is when it runs,
    under the lock the console's provider changes hold. A console provider

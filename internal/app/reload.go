@@ -193,20 +193,26 @@ func (h *Host) providerOnReloadLocked(id provider.ID) {
 // providerOffReloadLocked removes the host grant of id, which no flat
 // allows, as the console turning it off does. h.pmu is held.
 func (h *Host) providerOffReloadLocked(id provider.ID) {
+	was := h.Providers.HostAllows(id)
 	if err := h.setGrantLocked(id, false); err != nil {
 		h.logf("config reload: %s: remove the host grant: %v; retried at the next reload or start", id, err)
 		return
 	}
 	if proxyKind(id) && h.proxyNet != nil &&
 		!h.Providers.HostAllows(provider.Proxy) && !h.Providers.HostAllows(provider.ProxyPublic) {
+		// A route still registered, such as one a flat allowed after the
+		// reload listed the flats, keeps the kind on with its listener, as
+		// the console refuses to turn it off then; the other kind is then
+		// not turned on beside it.
 		if !h.Providers.DetachProxy() {
-			h.logf("config reload: %s: a reverse proxy route is still registered, so its listener stays open; a restart clears it", id)
-		} else {
-			if err := h.proxyNet.Close(); err != nil {
-				h.logf("reverse proxy listener shutdown: %v", err)
-			}
-			h.proxyNet = nil
+			h.restoreGrantLocked(id, was)
+			h.logf("config reload: network.permitted: %s stays on until a later reload or the next start, because a reverse proxy route is still registered", id)
+			return
 		}
+		if err := h.proxyNet.Close(); err != nil {
+			h.logf("reverse proxy listener shutdown: %v", err)
+		}
+		h.proxyNet = nil
 	}
 	h.providerChangedLocked(id, false, "", "by config reload")
 }
