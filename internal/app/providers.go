@@ -431,13 +431,19 @@ func (h *Host) currentPortalOptions() portal.Config {
 
 // flatsAllowing maps each non-local provider to the flats that allow it.
 func (h *Host) flatsAllowing(ctx context.Context) map[provider.ID][]string {
+	out, _ := h.flatsAllowingErr(ctx)
+	return out
+}
+
+// flatsAllowingErr is flatsAllowing, with the error of listing the flats.
+func (h *Host) flatsAllowingErr(ctx context.Context) (map[provider.ID][]string, error) {
 	out := map[provider.ID][]string{}
 	if h.Svc == nil {
-		return out
+		return out, nil
 	}
 	fs, err := h.Svc.ListFlats(ctx)
 	if err != nil {
-		return out
+		return out, err
 	}
 	for _, f := range fs {
 		for _, p := range f.Providers {
@@ -447,7 +453,7 @@ func (h *Host) flatsAllowing(ctx context.Context) map[provider.ID][]string {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // syncZrokConfigurationLocked sets the zrok part of the policy token to what

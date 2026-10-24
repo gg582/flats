@@ -212,10 +212,11 @@ The console's Settings → Networks turns a
 provider on or off while the host runs: turning one on saves the file and
 starts its backend at once (a backend contacts nothing until a flat allows the
 provider), and turning one off is refused while a flat still allows it.
-Removing a provider from `permitted` in the file takes its routes down at a
-SIGHUP reload or the next start, without the console's refusal, but keeps each
-flat's provider permission and visibility in `flats.db`; it never publishes a
-flat or changes visibility.
+Removing a provider from `permitted` in the file takes its routes down at the
+next start but keeps each flat's provider permission and visibility in
+`flats.db`; it never publishes a flat or changes visibility. A SIGHUP reload
+applies the removal at once only to a provider no flat allows; one that flats
+still allow keeps its routes until the next start, and the reload logs that.
 
 `portal.hide: true` keeps public flats out of the Portal relays' lists of
 sites. It is not access control: anyone with a flat's URL can still open it.

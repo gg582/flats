@@ -130,20 +130,14 @@ func TestReloadProviderPinnedByLegacyFlag(t *testing.T) {
 	}
 }
 
-// A failed grant removal is logged and leaves the provider's state as it was;
-// the next reload retries it. Unlike the console, a reload does not refuse to
-// remove a provider a flat still allows.
+// A reload removes the host grant of a provider no flat allows, as the
+// console turning it off does. A failed removal is logged and leaves the
+// provider's state as it was; the next reload retries it.
 func TestReloadProviderRemoval(t *testing.T) {
 	h, client := consoleHost(t)
 	ctx := context.Background()
 	if code, _ := setHost(t, h, client, "portal", true); code != 200 {
 		t.Fatal("turn on portal")
-	}
-	if _, err := h.Svc.CreateFlat(ctx, "site", "", core.ViaAPI); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Svc.SetProviderPermission(ctx, "site", "portal", true, core.ViaConsole); err != nil {
-		t.Fatal(err)
 	}
 	logs := captureLog(h)
 	h.testGrantFailure = func(id provider.ID, permitted bool) error { return errors.New("grant store down") }
@@ -166,13 +160,8 @@ func TestReloadProviderRemoval(t *testing.T) {
 	if h.Providers.HostAllows(provider.Portal) {
 		t.Fatal("the retry did not remove the grant")
 	}
-	// The flat keeps its permission, as after a restart.
-	f, err := h.Svc.GetFlat(ctx, "site")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(f.Providers, "portal") {
-		t.Fatalf("the flat's permission was removed: %v", f.Providers)
+	if !strings.Contains(logs(), "provider portal enabled=false by config reload") {
+		t.Fatalf("the removal was not logged: %q", logs())
 	}
 }
 

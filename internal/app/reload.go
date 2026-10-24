@@ -12,10 +12,9 @@ import (
 
 // ReloadConfig adopts config.json again, as SIGHUP asks: the file is
 // validated and becomes the host's current truth, or the reload is refused
-// and nothing changes. Provider grants and console domains are reconciled to
-// the adopted file the way the next start would set them, except what a
-// legacy service flag pins. Every attempt is logged; keys are named, never
-// valued.
+// and nothing changes. Provider grants are reconciled to the adopted file by
+// the console's rules, and console domains the way the next start would set
+// them. Every attempt is logged; keys are named, never valued.
 func (h *Host) ReloadConfig(ctx context.Context) error {
 	if h.Svc == nil || h.Providers == nil {
 		return nil
@@ -36,8 +35,8 @@ func (h *Host) ReloadConfig(ctx context.Context) error {
 	h.logReload(rep)
 	// The file is adopted. What is left, the provider and console domain
 	// reconciliation, runs on a context Close cancels, so a closing host
-	// starts no further route stops or console nodes for it; the next start
-	// does what it did not finish.
+	// starts no further provider changes or console nodes for it; the next
+	// start does what it did not finish.
 	ctx, done := h.reloadContext(ctx)
 	defer done()
 	h.reconcileProviders(ctx, rep)
@@ -88,13 +87,13 @@ func (h *Host) logReload(rep *core.ConfigReload) {
 	}
 }
 
-// reconcileProviders applies an adopted network.permitted as the next start
-// would: a newly permitted provider gets its host grant and its backend, a
-// removed one loses the grant and its routes come down. Unlike the console,
-// removing a provider that flats still allow is not refused: the file is the
-// operator's explicit instruction, and the flats keep their permission for
-// it. A provider a legacy service flag pins keeps its grant, and so does
-// Tailscale while it is the private backend, until the next start.
+// reconcileProviders applies an adopted network.permitted as the console's
+// provider changes do: a newly permitted provider gets its host grant and its
+// backend, and a removed one that no flat allows loses its grant. A removed
+// provider that flats still allow keeps its grant and routes until the next
+// start, as the console refuses to turn it off, and so does Tailscale while
+// it is the private backend. A provider a legacy service flag pins keeps its
+// grant.
 //
 // network.permitted is read again under h.pmu rather than taken from the
 // adopted file: a console provider change that ran after the adoption saved
@@ -122,6 +121,7 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 		}
 		h.providerOnReloadLocked(id)
 	}
+	var allowing map[provider.ID][]string
 	for _, id := range actual {
 		if slices.Contains(permitted, string(id)) {
 			continue
@@ -138,7 +138,22 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 		if h.reconcileStopped(ctx) {
 			return
 		}
-		h.providerOffReloadLocked(ctx, id)
+		if allowing == nil {
+			var err error
+			if allowing, err = h.flatsAllowingErr(ctx); err != nil {
+				h.logf("config reload: network.permitted: %s stays on until the next start, because the flats that allow it cannot be listed: %v", id, err)
+				allowing = nil
+				continue
+			}
+		}
+		if names := allowing[id]; len(names) > 0 {
+			// As the console refuses to turn it off: the routes it serves,
+			// and any exposure starting now, stay until the next start,
+			// which opens none for it.
+			h.logf("config reload: network.permitted: %s stays on until the next start, because flats still allow it: %s", id, strings.Join(names, ", "))
+			continue
+		}
+		h.providerOffReloadLocked(id)
 	}
 }
 
@@ -175,17 +190,12 @@ func (h *Host) providerOnReloadLocked(id provider.ID) {
 	h.providerChangedLocked(id, true, "", "by config reload")
 }
 
-// providerOffReloadLocked removes id's host grant and takes its routes down,
-// as the next start would. h.pmu is held.
-func (h *Host) providerOffReloadLocked(ctx context.Context, id provider.ID) {
+// providerOffReloadLocked removes the host grant of id, which no flat
+// allows, as the console turning it off does. h.pmu is held.
+func (h *Host) providerOffReloadLocked(id provider.ID) {
 	if err := h.setGrantLocked(id, false); err != nil {
-		h.logf("config reload: %s: remove the host grant: %v; its routes stay up", id, err)
+		h.logf("config reload: %s: remove the host grant: %v; retried at the next reload or start", id, err)
 		return
-	}
-	// No new routes open once the grant is gone; the routes it served come
-	// down. A failure is retried at the next reload or start.
-	if err := h.Providers.StopProvider(ctx, id); err != nil {
-		h.logf("config reload: %s: stop its routes: %v; retried at the next reload or start", id, err)
 	}
 	if proxyKind(id) && h.proxyNet != nil &&
 		!h.Providers.HostAllows(provider.Proxy) && !h.Providers.HostAllows(provider.ProxyPublic) {

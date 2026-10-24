@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/gosuda/flats/internal/config"
+	"github.com/gosuda/flats/internal/core"
 	"github.com/gosuda/flats/internal/expose/provider"
+	"github.com/gosuda/flats/internal/expose/proxy"
 	"github.com/gosuda/flats/internal/store"
 )
 
@@ -41,6 +44,74 @@ func TestReloadKeepsConsoleProviderChangeAfterAdoption(t *testing.T) {
 	}
 	if got := configPermitted(t, h); !slices.Contains(got, "portal") {
 		t.Fatalf("config.json lost the console's change: %v", got)
+	}
+}
+
+// proxyStatus is the status of a GET of the flat at host through the
+// reverse proxy listener at addr, as the proxy in front of it forwards it.
+func proxyStatus(t *testing.T, addr, host string) int {
+	t.Helper()
+	req, err := http.NewRequest("GET", "http://"+addr+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = host
+	req.Header.Set("X-Forwarded-Proto", "https")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// A reload that removes a provider a flat still allows keeps its host grant
+// and the flat's route until the next start, as the console refuses to turn
+// it off, and logs why. Listing the provider again leaves the route as it is.
+func TestReloadKeepsProviderFlatsAllow(t *testing.T) {
+	h, _ := startConfigHost(t, proxyConfig(t, "proxy.addr", "127.0.0.1:0", "proxy.url_template", testProxyTemplate, "network.permitted", "proxy"))
+	ctx := context.Background()
+	deploySite(t, h.Svc, "site", "<p>site</p>")
+	if err := h.Svc.SetProviderPermission(ctx, "site", "proxy", true, core.ViaConsole); err != nil {
+		t.Fatal(err)
+	}
+	addr := h.proxyBackend().(*proxy.Net).Addr()
+	if code := proxyStatus(t, addr, "site.site.example.org"); code != 200 {
+		t.Fatalf("the route before the reload: %d", code)
+	}
+	logs := captureLog(h)
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("network.permitted", "")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Providers.HostAllows(provider.Proxy) {
+		t.Fatal("the reload removed the grant of a provider a flat allows")
+	}
+	if !strings.Contains(logs(), "proxy stays on until the next start, because flats still allow it: site") {
+		t.Fatalf("the held removal was not logged: %q", logs())
+	}
+	if got := configPermitted(t, h); len(got) != 0 {
+		t.Fatalf("the file was not adopted: %v", got)
+	}
+	if code := proxyStatus(t, addr, "site.site.example.org"); code != 200 {
+		t.Fatalf("the route after the reload: %d", code)
+	}
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("network.permitted", "proxy")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Providers.HostAllows(provider.Proxy) {
+		t.Fatal("listing the provider again lost its grant")
+	}
+	if code := proxyStatus(t, addr, "site.site.example.org"); code != 200 {
+		t.Fatalf("the route after listing the provider again: %d", code)
+	}
+	if f, err := h.Svc.GetFlat(ctx, "site"); err != nil || !slices.Contains(f.Providers, "proxy") {
+		t.Fatalf("the flat's permission: %v %v", f.Providers, err)
 	}
 }
 

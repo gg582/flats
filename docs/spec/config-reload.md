@@ -83,24 +83,25 @@ table; a key's bucket follows the table's Applies column.
    sweep, `system.events_keep` at the next pruning, `system.redirect_days`
    for new renames. They log as applied; no side effect runs.
 
-6. **Network providers.** A reload applies `network.permitted` the way the
-   next start would, without waiting for it. A newly permitted provider's
-   host grant is recorded and its backend starts, as when the console turns
-   it on; a backend contacts nothing until a flat allows the provider. A
-   removed provider's grant is removed and its routes come down, as they
-   would at the next start; each flat's provider permission and visibility
-   in `flats.db` stay, and nothing is published or unpublished. Unlike the
-   console, a reload does not refuse a removal while a flat still allows the
-   provider: the file is the operator's explicit instruction, and a restart
-   would take the same routes down. The resulting state is the one a restart
-   with the same file would produce: a flat keeps its permission for the
-   removed provider, the provider serves no routes while it is not
-   permitted, and the console shows it as not permitted, exactly as after a
-   restart. A grant or backend failure is logged and leaves that provider's
-   state as it was; the rest of the reload stands.
+6. **Network providers.** A reload applies `network.permitted` by the
+   console's rules for turning a provider on or off. A newly permitted
+   provider's host grant is recorded and its backend starts, as when the
+   console turns it on; a backend contacts nothing until a flat allows the
+   provider. A removed provider that no flat allows loses its host grant, as
+   when the console turns it off. A grant or backend failure is logged and
+   leaves that provider's state as it was; the next reload retries it, and
+   the rest of the reload stands.
 
-   A removal that only a start can apply safely waits for it. While private
-   routes run on Tailscale, a reload does not remove Tailscale's grant: the
+   A removal that only a start can apply safely waits for it. The console
+   refuses to turn off a provider that a flat still allows; a reload instead
+   keeps that provider's host grant and routes for this run and logs, by
+   provider name, that the removal applies at the next start because flats
+   still allow it. The next start opens no route for the provider; each
+   flat's provider permission and visibility in `flats.db` stay, and nothing
+   is published or unpublished. A later reload removes the grant once no
+   flat allows the provider, and one that lists the provider again leaves
+   its grant and routes as they are. Likewise, while private routes run on
+   Tailscale, a reload does not remove Tailscale's grant: the
    `network.private_backend` change that moves them off it applies only at
    the next start. The reload logs that Tailscale stays on until then.
 
