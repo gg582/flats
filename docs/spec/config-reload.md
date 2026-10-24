@@ -121,7 +121,10 @@ table; a key's bucket follows the table's Applies column.
    was; the rest of the reload stands. A conflicting name enters the adopted
    list but is not served, and the conflict is logged. The conflict and
    reservation rules of the console flows apply unchanged: a name taken by a
-   flat, preview, redirect or a still-retiring node is not served.
+   flat, preview, redirect or a still-retiring node is not served. The check
+   and the start of the name's node hold the name's reservation, as a console
+   addition does, so a flat being created under that name meanwhile either
+   finishes first, and the name is not served, or is refused.
 
 8. **Restart-required keys.** These keys enter the adopted document and
    apply at the next start, exactly as they do today: `host.console_addr`,

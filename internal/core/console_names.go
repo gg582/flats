@@ -86,6 +86,34 @@ func (s *Service) ConsoleNameHolder(ctx context.Context, name string) (string, e
 	return "", nil
 }
 
+// ServeConsoleName runs serve for a name that a console domain list already
+// holds, while name's operation lock is held, the one flat creation and
+// renames take. holder describes what already uses name, as
+// ConsoleNameHolder does, or a preview being opened; serve must not start a
+// node for the name unless holder is "". A flat creation that checked the
+// name before the list held it has therefore either finished, and is the
+// holder, or waits until serve returns and then finds the name reserved.
+func (s *Service) ServeConsoleName(ctx context.Context, name string, serve func(holder string) error) error {
+	unlock := s.lock(name)
+	defer unlock()
+	holder, err := s.ConsoleNameHolder(ctx, name)
+	if err != nil {
+		return err
+	}
+	if holder == "" {
+		// Checked under one lock, as a reservation does: a preview
+		// registers itself before it releases its own reservation.
+		s.mu.Lock()
+		_, isPreview := s.prevs[name]
+		opening := s.previewAdding[name]
+		s.mu.Unlock()
+		if isPreview || opening {
+			holder = "a preview"
+		}
+	}
+	return serve(holder)
+}
+
 // ReserveConsoleName runs commit while name is reserved for a console
 // domain being added. It holds name's operation lock, the one flat creation
 // and renames take, so no flat can take name in between; previews skip it.

@@ -506,32 +506,32 @@ func (h *Host) retryConsoleDomains(ctx context.Context, prov string) {
 }
 
 // serveConsoleDomain records and serves the node of a listed domain, unless
-// a flat, preview or redirect uses that name.
+// a flat, preview or redirect uses that name. The name's check and the start
+// of its node run under the name's reservation, as a console addition's do,
+// so a flat created meanwhile cannot take the name too.
 func (h *Host) serveConsoleDomain(ctx context.Context, k cdKey) error {
 	b := h.consoleBackendOf(k.prov)
 	if b == nil {
 		h.setServed(k, false, providerLabel[k.prov]+" is not running")
 		return nil
 	}
-	holder, err := h.Svc.ConsoleNameHolder(ctx, k.name)
-	if err != nil {
-		return err
-	}
-	if holder != "" {
-		h.logf("warning: console domain %s is not served: %s uses that name; delete the domain or rename that flat", k.name, holder)
-		h.setServed(k, false, "used by "+holder)
+	return h.Svc.ServeConsoleName(ctx, k.name, func(holder string) error {
+		if holder != "" {
+			h.logf("warning: console domain %s is not served: %s uses that name; delete the domain or rename that flat", k.name, holder)
+			h.setServed(k, false, "used by "+holder)
+			return nil
+		}
+		if err := h.Store.PutConsoleNode(ctx, store.ConsoleNode{Provider: k.prov, Name: k.name}); err != nil {
+			return err
+		}
+		h.setOwned(k, true)
+		if err := b.serve(ctx, k.name, h.consoleHandler(k)); err != nil {
+			h.setServed(k, false, err.Error())
+			return err
+		}
+		h.setServed(k, true, "")
 		return nil
-	}
-	if err := h.Store.PutConsoleNode(ctx, store.ConsoleNode{Provider: k.prov, Name: k.name}); err != nil {
-		return err
-	}
-	h.setOwned(k, true)
-	if err := b.serve(ctx, k.name, h.consoleHandler(k)); err != nil {
-		h.setServed(k, false, err.Error())
-		return err
-	}
-	h.setServed(k, true, "")
-	return nil
+	})
 }
 
 // retireConsoleNode stops a console node and deletes its identity and

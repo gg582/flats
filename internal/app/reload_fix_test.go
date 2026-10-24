@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -414,5 +415,86 @@ func TestSIGHUPAction(t *testing.T) {
 		if got := sighupActionFor(c.ignored, c.interactive); got != c.want {
 			t.Errorf("ignored=%t interactive=%t: %d, want %d", c.ignored, c.interactive, got, c.want)
 		}
+	}
+}
+
+// waitBlocked waits until a goroutine whose stack names every frame in want
+// waits for a mutex.
+func waitBlocked(t *testing.T, want ...string) {
+	t.Helper()
+	waitFor(t, func() bool {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		for _, g := range strings.Split(string(buf), "\n\n") {
+			if !strings.Contains(g, "SemacquireMutex") {
+				continue
+			}
+			all := true
+			for _, w := range want {
+				all = all && strings.Contains(g, w)
+			}
+			if all {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// A console domain a reload lists is served under the name's reservation: a
+// flat creation that checked the name before the reload listed it either
+// finishes first, and the domain is not served, or finds the name reserved.
+// The name is never both a flat and a served console domain.
+func TestReloadedConsoleDomainRespectsFlatCreation(t *testing.T) {
+	h, tail, _ := tailnetHost(t)
+	ctx := context.Background()
+	// The creation of "ops" reads the console names, which do not list it
+	// yet, and then waits for cdNamesMu, held here, before it inserts the
+	// flat.
+	h.cdNamesMu.Lock()
+	held := true
+	release := func() {
+		if held {
+			held = false
+			h.cdNamesMu.Unlock()
+		}
+	}
+	defer release()
+	created := make(chan error, 1)
+	go func() {
+		_, err := h.Svc.CreateFlat(ctx, "ops", "", core.ViaAPI)
+		created <- err
+	}()
+	waitBlocked(t, "(*Host).consoleReserved", "(*Service).CreateFlat")
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "ops")
+	})
+	if _, err := h.Svc.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() {
+		h.cdMu.Lock()
+		defer h.cdMu.Unlock()
+		served <- h.serveConsoleDomain(ctx, cdKey{providerTailscale, "ops"})
+	}()
+	// Serving waits for the creation's name lock, or, checked without it,
+	// for cdNamesMu once it has found the name free.
+	waitBlocked(t, "(*Host).serveConsoleDomain")
+	release()
+	if err := <-created; err != nil {
+		t.Fatalf("the creation that checked the name first: %v", err)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if tail.isServed("ops") {
+		t.Fatal("the console domain was served under a flat's name")
+	}
+	h.cdNamesMu.Lock()
+	conflict := h.cd.conflicts[cdKey{providerTailscale, "ops"}]
+	h.cdNamesMu.Unlock()
+	if !strings.Contains(conflict, `the flat "ops"`) {
+		t.Fatalf("conflict %q", conflict)
 	}
 }
