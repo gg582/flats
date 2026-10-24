@@ -24,7 +24,8 @@ table; a key's bucket follows the table's Applies column.
    There is no file watcher. Reloads happen only on the signal. Reloads are
    serialized by the settings lock (requirement 10); SIGHUPs that arrive
    while one runs coalesce into at most one further reload. A SIGHUP that
-   arrives before the settings source exists is ignored.
+   arrives while the host starts reloads once the host has started, so an
+   edit saved after the start read the file is not lost.
 
    A host whose standard input is a terminal was started by hand, and there
    SIGHUP means the terminal closed: the host shuts down cleanly, as on

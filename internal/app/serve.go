@@ -207,12 +207,8 @@ func Serve(args []string) error {
 		return err
 	}
 	if hup != nil {
-		// A SIGHUP that arrived before the settings source exists requests
-		// no reload.
-		select {
-		case <-hup:
-		default:
-		}
+		// A SIGHUP that arrived while the host started may follow an edit
+		// Start did not read: it stays queued and reloads now.
 		go h.reloadOnSIGHUP(ctx, hup)
 	}
 	consoles := h.ConsoleURLs()
