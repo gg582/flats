@@ -24,6 +24,7 @@ type fakeTailnet struct {
 	suffix   string
 	served   map[string]http.Handler
 	stops    []string
+	serves   []string // every node start, in order
 	stopErr  map[string]error
 	serveErr error
 	onStop   map[string]func() // what stopping a node closes
@@ -37,6 +38,7 @@ func newFakeTailnet() *fakeTailnet {
 func (n *fakeTailnet) Serve(_ context.Context, host string, h http.Handler, _ bool) (string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.serves = append(n.serves, host)
 	if n.serveErr != nil {
 		return "", n.serveErr
 	}
@@ -85,6 +87,12 @@ func (n *fakeTailnet) isServed(host string) bool {
 	defer n.mu.Unlock()
 	_, ok := n.served[host]
 	return ok
+}
+
+func (n *fakeTailnet) started() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.serves)
 }
 
 func (n *fakeTailnet) stopped() []string {

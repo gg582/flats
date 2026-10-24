@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"runtime"
@@ -229,7 +230,7 @@ func TestCancelledReconciliationChangesNothing(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	h.reconcileProviders(cancelled, rep)
-	h.reconcileConsoleDomains(cancelled, rep)
+	h.reconcileConsoleDomains(cancelled)
 	h.pmu.Lock()
 	portalNet := h.portalNet
 	h.pmu.Unlock()
@@ -485,5 +486,111 @@ func TestReloadedConsoleDomainRespectsFlatCreation(t *testing.T) {
 	h.cdNamesMu.Unlock()
 	if !strings.Contains(conflict, `the flat "ops"`) {
 		t.Fatalf("conflict %q", conflict)
+	}
+}
+
+// consoleNodeRecord returns the console_nodes row of a Tailscale console
+// domain.
+func consoleNodeRecord(t *testing.T, h *Host, name string) (store.ConsoleNode, bool) {
+	t.Helper()
+	nodes, err := h.Store.ListConsoleNodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.Provider == providerTailscale && n.Name == name {
+			return n, true
+		}
+	}
+	return store.ConsoleNode{}, false
+}
+
+// A reload reconciles the console domains even when the lists did not
+// change: a retirement that failed at an earlier reload is retried, and a
+// domain already served is not started again.
+func TestUnchangedReloadRetriesConsoleDomains(t *testing.T) {
+	h, tail, _ := tailnetHost(t)
+	ctx := context.Background()
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "keep,ops")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !tail.isServed("keep") || !tail.isServed("ops") {
+		t.Fatal("the listed console domains were not served")
+	}
+	tail.mu.Lock()
+	tail.stopErr["ops"] = errors.New("control plane down")
+	tail.mu.Unlock()
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "keep")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		n, ok := consoleNodeRecord(t, h, "ops")
+		return ok && n.Retiring && n.LastError != ""
+	})
+	started := len(tail.started())
+	tail.mu.Lock()
+	delete(tail.stopErr, "ops")
+	tail.mu.Unlock()
+	// The file is as the last reload left it.
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		_, ok := consoleNodeRecord(t, h, "ops")
+		return !ok
+	})
+	if tail.isServed("ops") || !tail.isServed("keep") {
+		t.Fatalf("after the retry: ops served %v, keep served %v", tail.isServed("ops"), tail.isServed("keep"))
+	}
+	if got := tail.started(); len(got) != started {
+		t.Fatalf("the unchanged reload started nodes again: %v", got[started:])
+	}
+}
+
+// A retirement a pass queued for a node that has since been retired, or
+// served again, does nothing: a second pass may queue the same node.
+func TestStaleQueuedRetirementDoesNothing(t *testing.T) {
+	h, tail, _ := tailnetHost(t)
+	ctx := context.Background()
+	k := cdKey{providerTailscale, "ops"}
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "keep,ops")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Served again: the stale retirement leaves the node alone.
+	h.retireQueuedNode(ctx, k)
+	if !tail.isServed("ops") || slices.Contains(tail.stopped(), "ops") {
+		t.Fatal("a stale retirement stopped a served node")
+	}
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("tailscale.console_hosts", "keep")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		_, ok := consoleNodeRecord(t, h, "ops")
+		return !ok
+	})
+	// Retired: a stale retirement, whose stop would fail now, neither stops
+	// it again nor records it back.
+	tail.mu.Lock()
+	tail.stopErr["ops"] = errors.New("no such node")
+	tail.mu.Unlock()
+	stops := len(tail.stopped())
+	h.retireQueuedNode(ctx, k)
+	if len(tail.stopped()) != stops {
+		t.Fatal("a stale retirement stopped the node again")
+	}
+	if _, ok := consoleNodeRecord(t, h, "ops"); ok {
+		t.Fatal("a stale retirement recorded a retired node again")
 	}
 }

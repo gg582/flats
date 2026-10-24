@@ -113,13 +113,15 @@ table; a key's bucket follows the table's Applies column.
 
 7. **Console domains.** A reload reconciles both console domain lists,
    `tailscale.console_hosts` and `netbird.console_hosts`, the way the next
-   start would. A listed name that is not served starts being served, as
-   when the console adds it. A served name that is no longer listed is
+   start would, whether or not the file changed them. A listed name that is
+   not served starts being served, as when the console adds it; a name
+   already served is left as it is. A served name that is no longer listed is
    retired the way a start retires it: the Tailscale node logs out, the
    NetBird peer stops, and the identity is deleted. A failed retirement
    keeps the name reserved, is logged, and retries at the next reload or
    start. A conflict or a failed retirement leaves that name's state as it
-   was; the rest of the reload stands. A conflicting name enters the adopted
+   was; the rest of the reload stands, and the next reload retries the name,
+   serving it once its conflict has gone. A conflicting name enters the adopted
    list but is not served, and the conflict is logged. The conflict and
    reservation rules of the console flows apply unchanged: a name taken by a
    flat, preview, redirect or a still-retiring node is not served. The check

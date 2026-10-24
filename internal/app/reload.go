@@ -40,7 +40,7 @@ func (h *Host) ReloadConfig(ctx context.Context) error {
 	ctx, done := h.reloadContext(ctx)
 	defer done()
 	h.reconcileProviders(ctx, rep)
-	h.reconcileConsoleDomains(ctx, rep)
+	h.reconcileConsoleDomains(ctx)
 	if rep.PreferredProblem != "" {
 		h.logf("warning: %s", rep.PreferredProblem)
 	}
@@ -202,13 +202,10 @@ func (h *Host) providerOffReloadLocked(id provider.ID) {
 
 // reconcileConsoleDomains applies the adopted console domain lists the way a
 // start does: a listed name that is not served starts being served, and a
-// node no longer listed is retired, with failures retried at the next reload
-// or start.
-func (h *Host) reconcileConsoleDomains(ctx context.Context, rep *core.ConfigReload) {
-	if slices.Equal(rep.TailscaleHostsBefore, rep.TailscaleHostsAfter) &&
-		slices.Equal(rep.NetbirdHostsBefore, rep.NetbirdHostsAfter) {
-		return
-	}
+// node no longer listed is retired. It runs at every reload, changed lists or
+// not, so a failed retirement or serve, or a conflict whose holder has gone,
+// of an earlier reload or the start is retried.
+func (h *Host) reconcileConsoleDomains(ctx context.Context) {
 	if h.reconcileStopped(ctx) {
 		return
 	}

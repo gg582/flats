@@ -408,7 +408,9 @@ func (h *Host) ConsoleURLs() []string {
 // retired, and serves the listed ones, on both networks. A listed name a
 // flat, preview or redirect already uses is not served: the network would
 // hand that node to the console. A listed name whose earlier retirement has
-// not finished is served only once it succeeds, with a new identity.
+// not finished is served only once it succeeds, with a new identity. It runs
+// at start and at every config reload; a name this process already serves
+// is left as it is, and a conflict or failure of an earlier pass is retried.
 func (h *Host) startConsoleDomains(ctx context.Context) error {
 	// Retirement workers take cdMu too, so none changes a name's state before
 	// this pass has set every listed name's.
@@ -437,26 +439,7 @@ func (h *Host) startConsoleDomains(ctx context.Context) error {
 				return err
 			}
 		}
-		h.background(func(ctx context.Context) {
-			h.cdMu.Lock()
-			defer h.cdMu.Unlock()
-			// A closing host starts no further retirement; the node stays
-			// recorded as retiring, so the next start retires it.
-			if ctx.Err() != nil {
-				h.logf("console domain %s: retirement of its %s node left to the next start: the host is shutting down", k.name, providerLabel[k.prov])
-				return
-			}
-			if err := h.retireConsoleNode(ctx, k); err != nil {
-				h.logf("console domain %s: retire its %s node: %v; retried at the next start", k.name, providerLabel[k.prov], err)
-				return
-			}
-			// Listed again (offline) while its retirement was unfinished: serve it now.
-			if slices.Contains(h.consoleHostsOf(k.prov), k.name) {
-				if err := h.serveConsoleDomain(ctx, k); err != nil {
-					h.logf("console domain %s: %v", k.name, err)
-				}
-			}
-		})
+		h.background(func(ctx context.Context) { h.retireQueuedNode(ctx, k) })
 	}
 	for _, prov := range consoleProviders {
 		for _, name := range h.consoleHostsOf(prov) {
@@ -466,6 +449,9 @@ func (h *Host) startConsoleDomains(ctx context.Context) error {
 				h.setServed(k, false, providerLabel[prov]+" is not running")
 			case retiring[k]:
 				h.setServed(k, false, "its previous node is still being retired")
+			case h.isServed(k):
+				// Served by this process already, by a start or an earlier
+				// reload.
 			default:
 				if err := h.serveConsoleDomain(ctx, k); err != nil {
 					h.logf("console domain %s (%s): %v", name, providerLabel[prov], err)
@@ -474,6 +460,51 @@ func (h *Host) startConsoleDomains(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// retireQueuedNode retires the node of k that a pass of startConsoleDomains
+// marked retiring, and serves k again if it is listed once more.
+func (h *Host) retireQueuedNode(ctx context.Context, k cdKey) {
+	h.cdMu.Lock()
+	defer h.cdMu.Unlock()
+	// A closing host starts no further retirement; the node stays recorded
+	// as retiring, so the next start retires it.
+	if ctx.Err() != nil {
+		h.logf("console domain %s: retirement of its %s node left to the next start: the host is shutting down", k.name, providerLabel[k.prov])
+		return
+	}
+	// A later pass may have queued the same node again: only a node still
+	// recorded as retiring is retired, so a finished retirement is not
+	// repeated, its record not written back, and a node served since then
+	// not stopped.
+	if retiring, err := h.consoleNodeRetiring(ctx, k); err != nil {
+		h.logf("console domain %s: retire its %s node: %v; retried at the next reload or start", k.name, providerLabel[k.prov], err)
+		return
+	} else if !retiring {
+		return
+	}
+	if err := h.retireConsoleNode(ctx, k); err != nil {
+		h.logf("console domain %s: retire its %s node: %v; retried at the next reload or start", k.name, providerLabel[k.prov], err)
+		return
+	}
+	// Listed again (offline) while its retirement was unfinished: serve it now.
+	if slices.Contains(h.consoleHostsOf(k.prov), k.name) {
+		if err := h.serveConsoleDomain(ctx, k); err != nil {
+			h.logf("console domain %s: %v", k.name, err)
+		}
+	}
+}
+
+// consoleNodeRetiring reports whether the node of k is still recorded as
+// retiring. h.cdMu is held.
+func (h *Host) consoleNodeRetiring(ctx context.Context, k cdKey) (bool, error) {
+	nodes, err := h.Store.ListConsoleNodes(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(nodes, func(n store.ConsoleNode) bool {
+		return n.Provider == k.prov && n.Name == k.name && n.Retiring
+	}), nil
 }
 
 // retryConsoleDomains serves again the listed console domains of prov that
