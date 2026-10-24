@@ -4,7 +4,9 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gosuda/flats/internal/config"
 	"github.com/gosuda/flats/internal/expose/provider"
@@ -145,15 +147,103 @@ func TestCloseCancelsReloadReconciliation(t *testing.T) {
 	}
 }
 
+// A reconciliation that a closing host cancelled before it began starts no
+// backend and records no grant or console domain.
+func TestCancelledReconciliationChangesNothing(t *testing.T) {
+	h, tail, _ := tailnetHost(t)
+	ctx := context.Background()
+	editHostConfig(t, h, func(d *config.Document) error {
+		if err := d.Set("network.permitted", "tailscale,portal"); err != nil {
+			return err
+		}
+		return d.Set("tailscale.console_hosts", "ops")
+	})
+	rep, err := h.Svc.ReloadConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLog(h)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	h.reconcileProviders(cancelled, rep)
+	h.reconcileConsoleDomains(cancelled, rep)
+	h.pmu.Lock()
+	portalNet := h.portalNet
+	h.pmu.Unlock()
+	if portalNet != nil || h.Providers.HostAllows(provider.Portal) {
+		t.Fatal("a cancelled reconciliation started portal")
+	}
+	if tail.isServed("ops") {
+		t.Fatal("a cancelled reconciliation served a console domain")
+	}
+	if !strings.Contains(logs(), "stopped by shutdown") {
+		t.Fatalf("the stop was not logged: %q", logs())
+	}
+}
+
+// Close during a reload's provider change lets that one change finish and
+// cancels the rest: the reload makes no further change, and Close returns.
+func TestCloseDuringReconciliationStopsFurtherChanges(t *testing.T) {
+	h, client := consoleHost(t)
+	ctx := context.Background()
+	for _, id := range []string{"portal", "cloudflare-quick"} {
+		if code, out := setHost(t, h, client, id, true); code != 200 {
+			t.Fatalf("turn on %s: %d %v", id, code, out)
+		}
+	}
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("network.permitted", "")
+	})
+	logs := captureLog(h)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// The first grant removal blocks, as a slow backend would.
+	h.testGrantFailure = func(id provider.ID, permitted bool) error {
+		if !permitted {
+			once.Do(func() { close(entered); <-release })
+		}
+		return nil
+	}
+	gate := make(chan struct{})
+	h.testReloadGate = func() { close(gate) }
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- h.ReloadConfig(ctx) }()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- h.Close() }()
+	<-gate // Close has cancelled the reconciliation and waits for the reload.
+	close(release)
+	if err := <-reloaded; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return after the in-flight change finished")
+	}
+	out := logs()
+	if n := strings.Count(out, "enabled=false by config reload"); n != 1 {
+		t.Fatalf("provider removals after Close began = %d, want only the in-flight one: %q", n, out)
+	}
+	if !strings.Contains(out, "stopped by shutdown") {
+		t.Fatalf("the stop was not logged: %q", out)
+	}
+}
+
 // SIGHUP stops a host started from a terminal, as closing the terminal asks,
-// leaves an inherited ignore in place, and reloads config.json otherwise.
+// leaves an inherited ignore in place with or without a terminal, and
+// reloads config.json otherwise.
 func TestSIGHUPAction(t *testing.T) {
 	for _, c := range []struct {
 		ignored, interactive bool
 		want                 sighupAction
 	}{
 		{false, false, sighupReload},
-		{true, false, sighupReload},
+		{true, false, sighupIgnore},
 		{false, true, sighupStop},
 		{true, true, sighupIgnore},
 	} {

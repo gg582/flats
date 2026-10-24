@@ -117,6 +117,9 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 		if _, pinned := h.networkPins[id]; pinned {
 			continue
 		}
+		if h.reconcileStopped(ctx) {
+			return
+		}
 		h.providerOnReloadLocked(id)
 	}
 	for _, id := range actual {
@@ -132,8 +135,21 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 			h.logf("config reload: network.permitted: tailscale stays on until the next start, because private routes run on it; network.private_backend changes at a start")
 			continue
 		}
+		if h.reconcileStopped(ctx) {
+			return
+		}
 		h.providerOffReloadLocked(ctx, id)
 	}
+}
+
+// reconcileStopped reports whether a closing host cancelled the
+// reconciliation, which then starts no further change.
+func (h *Host) reconcileStopped(ctx context.Context) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	h.logf("config reload: stopped by shutdown before every provider and console domain change was applied; the next start applies the rest")
+	return true
 }
 
 // providerOnReloadLocked grants id and starts its backend, as the console
@@ -194,6 +210,9 @@ func (h *Host) reconcileConsoleDomains(ctx context.Context, rep *core.ConfigRelo
 		slices.Equal(rep.NetbirdHostsBefore, rep.NetbirdHostsAfter) {
 		return
 	}
+	if h.reconcileStopped(ctx) {
+		return
+	}
 	if err := h.startConsoleDomains(ctx); err != nil {
 		h.logf("config reload: reconcile console domains: %v", err)
 	}
@@ -211,19 +230,19 @@ const (
 	sighupIgnore
 )
 
-// sighupActionFor picks the SIGHUP action. A host whose standard input is a
-// terminal was started by hand, so SIGHUP means the terminal closed and the
-// host stops cleanly, unless the signal is already ignored (as under nohup).
-// Without a terminal (a service manager, a container without -t) SIGHUP
-// reloads config.json.
+// sighupActionFor picks the SIGHUP action. A SIGHUP ignored when the host
+// started (as under nohup) stays ignored. Otherwise a host whose standard
+// input is a terminal was started by hand, so SIGHUP means the terminal
+// closed and the host stops cleanly; without a terminal (a service manager,
+// a container without -t) SIGHUP reloads config.json.
 func sighupActionFor(ignored, interactive bool) sighupAction {
 	switch {
-	case !interactive:
-		return sighupReload
 	case ignored:
 		return sighupIgnore
-	default:
+	case interactive:
 		return sighupStop
+	default:
+		return sighupReload
 	}
 }
 

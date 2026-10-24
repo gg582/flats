@@ -597,8 +597,9 @@ approvals.
   effects as a console save, the others apply at the next start, and an
   invalid file is refused and logged, changing nothing. A `flats serve`
   started in a terminal stops on SIGHUP instead, as when the terminal
-  closes. Without a reload the change applies at the next start, which fails
-  if the file is invalid.
+  closes, and one started with SIGHUP ignored (as under `nohup`) ignores it.
+  Without a reload the change applies at the next start, which fails if the
+  file is invalid.
 
 Every Flats write keeps the previous file in `config-history/`, writes a
 synced temporary file, renames it into place and syncs the directory.

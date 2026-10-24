@@ -28,8 +28,9 @@ table; a key's bucket follows the table's Applies column.
 
    A host whose standard input is a terminal was started by hand, and there
    SIGHUP means the terminal closed: the host shuts down cleanly, as on
-   Ctrl+C. If SIGHUP was already ignored when it started (as under `nohup`),
-   it stays ignored. Neither case reloads.
+   Ctrl+C, and does not reload. A SIGHUP that was already ignored when the
+   host started (as under `nohup`) stays ignored, with or without a
+   terminal; such a host neither reloads nor stops on it.
 
 2. **Validation before adoption.** A reload parses and validates the whole
    file with the same rules a start applies: strict parsing, per-key checks,
@@ -147,8 +148,10 @@ table; a key's bucket follows the table's Applies column.
 10. **Atomicity.** A reload holds the same settings lock as a console save,
     so the two cannot interleave, and each observes the other's result.
     Both run the same side effects for a changed setting. Shutting the host
-    down cancels the provider and console domain reconciliation of a reload
-    in flight, never its adoption; the next start finishes what it left.
+    down waits for a reload in flight but never cancels its adoption. It
+    cancels the provider and console domain reconciliation: a provider or
+    console domain change already running finishes, no further one starts,
+    and the next start applies the rest.
 
 11. **Observability.** Every reload attempt logs its outcome. A successful
     reload logs the applied keys, the keys awaiting restart, and the keys
