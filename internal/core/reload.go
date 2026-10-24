@@ -198,8 +198,8 @@ func lookupString(c *config.Config, key string) string {
 // refused and nothing changes. Changed keys with a live path take effect with
 // the same side effects as a console settings save; a failed side effect is
 // logged and the adopted file stands. As at a start after an offline edit,
-// boards anyone can edit that a lowered quota no longer allows go back to
-// view only. The report names every key by name only.
+// boards and documents anyone can edit that a lowered quota no longer allows
+// go back to view only. The report names every key by name only.
 func (s *Service) ReloadConfig(ctx context.Context) (*ConfigReload, error) {
 	s.publicEditMu.Lock()
 	defer s.publicEditMu.Unlock()
@@ -209,10 +209,11 @@ func (s *Service) ReloadConfig(ctx context.Context) (*ConfigReload, error) {
 	}
 	s.applySettingChanges(ctx, rep.Applied)
 	// Unlike a console save, which refuses such a quota, a reload stands, so
-	// the boards it leaves without a quota go back to view only, as at a start.
+	// the boards and documents it leaves without a quota go back to view
+	// only, as at a start.
 	if slices.Contains(rep.Applied, SetRevisionQuota) || slices.Contains(rep.Applied, SetDiskQuotaBytes) {
-		if err := s.downgradeEditBoards(ctx); err != nil {
-			s.logf("config reload: downgrade boards anyone can edit: %v", err)
+		if err := s.downgradeEdit(ctx); err != nil {
+			s.logf("config reload: stop guest editing that the quotas no longer allow: %v", err)
 		}
 	}
 	return rep, nil
