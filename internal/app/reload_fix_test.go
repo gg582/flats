@@ -145,7 +145,7 @@ func TestReloadProxyKindSwitchWhileFlatsAllow(t *testing.T) {
 	if !h.Providers.HostAllows(provider.Proxy) || h.Providers.HostAllows(provider.ProxyPublic) {
 		t.Fatalf("grants after the switch: proxy %v, proxy-public %v", h.Providers.HostAllows(provider.Proxy), h.Providers.HostAllows(provider.ProxyPublic))
 	}
-	if !strings.Contains(logs(), "proxy-public is not turned on while proxy stays on because flats allow it") {
+	if !strings.Contains(logs(), "proxy-public is not turned on while proxy stays on; a later reload or the next start turns it on once proxy is off") {
 		t.Fatalf("the deferred turn-on was not logged: %q", logs())
 	}
 	// The Private route and its preview stay, on the Private kind alone.

@@ -147,7 +147,7 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 		}
 		if proxyKind(id) && h.Providers.HostAllows(otherProxyKind(id)) {
 			// The two kinds share one listener and are never on together.
-			h.logf("config reload: network.permitted: %s is not turned on while %s stays on because flats allow it; a later reload or the next start turns it on once %s is off", id, otherProxyKind(id), otherProxyKind(id))
+			h.logf("config reload: network.permitted: %s is not turned on while %s stays on; a later reload or the next start turns it on once %s is off", id, otherProxyKind(id), otherProxyKind(id))
 			continue
 		}
 		if h.reconcileStopped(ctx) {
