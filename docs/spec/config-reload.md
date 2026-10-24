@@ -104,10 +104,16 @@ table; a key's bucket follows the table's Applies column.
    flat's provider permission and visibility in `flats.db` stay, and nothing
    is published or unpublished. A later reload removes the grant once no
    flat allows the provider, and one that lists the provider again leaves
-   its grant and routes as they are. Likewise, while private routes run on
-   Tailscale, a reload does not remove Tailscale's grant: the
-   `network.private_backend` change that moves them off it applies only at
-   the next start. The reload logs that Tailscale stays on until then.
+   its grant and routes as they are. The two reverse proxy kinds share one
+   listener and are never on together, by their host grants: a reload
+   applies removals before additions, and while a removed kind stays on
+   because flats allow it, the other kind is not turned on, which the
+   reload logs. It is turned on once the first kind is off, by a later
+   reload or at the next start; the console refuses to turn it on until
+   then. Likewise, while private routes run on Tailscale, a reload does not
+   remove Tailscale's grant: the `network.private_backend` change that
+   moves them off it applies only at the next start. The reload logs that
+   Tailscale stays on until then.
 
    The reconciliation applies `network.permitted` as it is when it runs,
    under the lock the console's provider changes hold. A console provider

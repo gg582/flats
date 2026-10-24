@@ -40,7 +40,11 @@ where a rename redirect sends a visitor.
 1. **Two provider IDs.** `proxy` is a Private provider. `proxy-public` is a
    Public provider. They share one listener and one address template, so the
    host turns on at most one of them at a time. Turning on the other one is
-   refused until the first is off.
+   refused until the first is off. This holds for the host grants in
+   effect, not only the saved `network.permitted`: a config reload that
+   removes a kind flats still allow keeps it on until the next start
+   ([config reload](config-reload.md), requirement 6), and the other kind
+   waits until the first is off.
 2. **Same rules as the other providers.** A proxy provider serves a flat only
    when the host permits it (`network.permitted`) and the flat allows it, as
    for every non-local provider ([networking](../networking.md#providers)).

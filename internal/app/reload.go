@@ -88,11 +88,12 @@ func (h *Host) logReload(rep *core.ConfigReload) {
 }
 
 // reconcileProviders applies an adopted network.permitted as the console's
-// provider changes do: a newly permitted provider gets its host grant and its
-// backend, and a removed one that no flat allows loses its grant. A removed
-// provider that flats still allow keeps its grant and routes until the next
-// start, as the console refuses to turn it off, and so does Tailscale while
-// it is the private backend. A reload never changes a provider a legacy
+// provider changes do: a removed provider that no flat allows loses its
+// grant, and then a newly permitted provider gets its host grant and its
+// backend. A removed provider that flats still allow keeps its grant and
+// routes until the next start, as the console refuses to turn it off, and so
+// does Tailscale while it is the private backend. A reverse proxy kind is
+// not turned on while the other kind's grant stays on. A reload never changes a provider a legacy
 // service flag pins: it refuses such a file before adopting it.
 //
 // network.permitted is read again under h.pmu rather than taken from the
@@ -103,16 +104,8 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 	defer h.pmu.Unlock()
 	permitted := h.Svc.PermittedNetworks()
 	actual := h.Providers.File().Permitted
-	for _, raw := range permitted {
-		id := provider.ID(raw)
-		if h.Providers.HostAllows(id) {
-			continue
-		}
-		if h.reconcileStopped(ctx) {
-			return
-		}
-		h.providerOnReloadLocked(id)
-	}
+	// Removals first, so a provider whose grant comes off frees what a newly
+	// permitted one needs, such as the shared reverse proxy listener.
 	var allowing map[provider.ID][]string
 	for _, id := range actual {
 		if slices.Contains(permitted, string(id)) {
@@ -135,6 +128,9 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 				continue
 			}
 		}
+		// As in the console's turn-off, a flat allowed the provider after
+		// this list was read is not seen here: per-flat permission changes
+		// take the flat's lock, not h.pmu.
 		if names := allowing[id]; len(names) > 0 {
 			// As the console refuses to turn it off: the routes it serves,
 			// and any exposure starting now, stay until the next start,
@@ -143,6 +139,21 @@ func (h *Host) reconcileProviders(ctx context.Context, rep *core.ConfigReload) {
 			continue
 		}
 		h.providerOffReloadLocked(id)
+	}
+	for _, raw := range permitted {
+		id := provider.ID(raw)
+		if h.Providers.HostAllows(id) {
+			continue
+		}
+		if proxyKind(id) && h.Providers.HostAllows(otherProxyKind(id)) {
+			// The two kinds share one listener and are never on together.
+			h.logf("config reload: network.permitted: %s is not turned on while %s stays on because flats allow it; a later reload or the next start turns it on once %s is off", id, otherProxyKind(id), otherProxyKind(id))
+			continue
+		}
+		if h.reconcileStopped(ctx) {
+			return
+		}
+		h.providerOnReloadLocked(id)
 	}
 }
 

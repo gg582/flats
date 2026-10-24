@@ -203,6 +203,13 @@ func (h *Host) SetNetworkProvider(ctx context.Context, raw string, enabled bool,
 	h.pmu.Lock()
 	defer h.pmu.Unlock()
 	previous := h.Svc.PermittedNetworks()
+	// The two reverse proxy kinds share one listener; the settings check
+	// below refuses the second while the list names the first. A config
+	// reload can remove the first from the list while flats allow it, and
+	// its grant then stays on until the next start.
+	if other := otherProxyKind(id); enabled && proxyKind(id) && h.Providers.HostAllows(other) && !slices.Contains(previous, string(other)) {
+		return "", fmt.Errorf("%w: %s stays on until the next start because flats still allow it, and it shares its listener with %s; stop allowing %s on every flat and turn it off first", core.ErrConflict, other, id, other)
+	}
 	permitted := slices.Clone(previous)
 	if enabled {
 		if !slices.Contains(permitted, string(id)) {

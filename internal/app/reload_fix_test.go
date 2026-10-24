@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"runtime"
@@ -114,6 +115,58 @@ func TestReloadKeepsProviderFlatsAllow(t *testing.T) {
 	}
 	if f, err := h.Svc.GetFlat(ctx, "site"); err != nil || !slices.Contains(f.Providers, "proxy") {
 		t.Fatalf("the flat's permission: %v %v", f.Providers, err)
+	}
+}
+
+// A reload that switches the reverse proxy kind while a flat still allows
+// the old one keeps only the old kind on: the two share one listener, so the
+// new kind waits until the old one is off, and the console refuses to turn
+// it on meanwhile. Once no flat allows the old kind, one reload turns it off
+// and the new kind on.
+func TestReloadProxyKindSwitchWhileFlatsAllow(t *testing.T) {
+	h, client := startConfigHost(t, proxyConfig(t, "proxy.addr", "127.0.0.1:0", "proxy.url_template", testProxyTemplate, "network.permitted", "proxy"))
+	ctx := context.Background()
+	deploySite(t, h.Svc, "site", "<p>site</p>")
+	if err := h.Svc.SetProviderPermission(ctx, "site", "proxy", true, core.ViaConsole); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := h.Svc.OpenPreview(ctx, "site", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := h.proxyBackend().(*proxy.Net).Addr()
+	logs := captureLog(h)
+	editHostConfig(t, h, func(d *config.Document) error {
+		return d.Set("network.permitted", "proxy-public")
+	})
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Providers.HostAllows(provider.Proxy) || h.Providers.HostAllows(provider.ProxyPublic) {
+		t.Fatalf("grants after the switch: proxy %v, proxy-public %v", h.Providers.HostAllows(provider.Proxy), h.Providers.HostAllows(provider.ProxyPublic))
+	}
+	if !strings.Contains(logs(), "proxy-public is not turned on while proxy stays on because flats allow it") {
+		t.Fatalf("the deferred turn-on was not logged: %q", logs())
+	}
+	// The Private route and its preview stay, on the Private kind alone.
+	if code := proxyStatus(t, addr, preview.Host+".site.example.org"); code != 200 {
+		t.Fatalf("the preview after the switch: %d", code)
+	}
+	if code, out := setHost(t, h, client, "proxy-public", true); code != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), "shares its listener") {
+		t.Fatalf("console turn-on of the other kind: %d %v", code, out)
+	}
+	if h.Providers.HostAllows(provider.ProxyPublic) {
+		t.Fatal("the refused turn-on granted proxy-public")
+	}
+
+	if err := h.Svc.SetProviderPermission(ctx, "site", "proxy", false, core.ViaConsole); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.Providers.HostAllows(provider.Proxy) || !h.Providers.HostAllows(provider.ProxyPublic) {
+		t.Fatalf("grants once no flat allows proxy: proxy %v, proxy-public %v", h.Providers.HostAllows(provider.Proxy), h.Providers.HostAllows(provider.ProxyPublic))
 	}
 }
 

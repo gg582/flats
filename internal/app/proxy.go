@@ -16,6 +16,14 @@ import (
 // which share one listener.
 func proxyKind(id provider.ID) bool { return id == provider.Proxy || id == provider.ProxyPublic }
 
+// otherProxyKind is the reverse proxy provider that shares id's listener.
+func otherProxyKind(id provider.ID) provider.ID {
+	if id == provider.Proxy {
+		return provider.ProxyPublic
+	}
+	return provider.Proxy
+}
+
 // listenProxy binds the reverse proxy listener at addr. The listener reads
 // the template through template on every request, so a template saved in
 // the settings applies at once.

@@ -217,6 +217,8 @@ next start but keeps each flat's provider permission and visibility in
 `flats.db`; it never publishes a flat or changes visibility. A SIGHUP reload
 applies the removal at once only to a provider no flat allows; one that flats
 still allow keeps its routes until the next start, and the reload logs that.
+While such a reverse proxy kind stays on, the other kind is not turned on,
+because the two share one listener; it is turned on once the first is off.
 
 `portal.hide: true` keeps public flats out of the Portal relays' lists of
 sites. It is not access control: anyone with a flat's URL can still open it.
